@@ -1,0 +1,958 @@
+/**
+ * Zapfy Main Application Controller (js/app.js)
+ * Coordinates GPS geolocation, Tankerkönig real-time API fetching, 1-Tap Google Maps
+ * turn-by-turn navigation handover, IndexedDB price snapshot recording, and statistical forecasting.
+ */
+
+import { db } from './db.js';
+import { FuelApiService } from './fuel_api.js';
+import { PriceEngine } from './price_engine.js';
+import { ExportService } from './export_service.js';
+
+const FUEL_LABELS = {
+  e10: 'Super E10',
+  e5: 'Super E5',
+  diesel: 'Diesel'
+};
+
+class ZapfyApp {
+  constructor() {
+    this.activeTabIndex = 0;
+    this.statsSubView = 'cycle'; // 'cycle' | 'history'
+
+    this.fuelType = 'e10';
+    this.radiusKm = 5;
+    this.sortMode = 'price'; // 'price' | 'dist' | 'fav'
+
+    this.config = {
+      apiKey: '',
+      demoMode: false,
+      tankVolume: 50,
+      defaultFuel: 'e10',
+      fallbackRegion: '52.5200,13.4050'
+    };
+
+    this.currentLocation = {
+      lat: 52.5200,
+      lng: 13.4050,
+      accuracy: null,
+      isLiveGps: false,
+      updatedAt: null
+    };
+
+    this.stations = [];
+    this.dataSource = 'demo'; // 'live' | 'demo'
+    this.favoritesSet = new Set();
+    this.stationDetailsMap = new Map();
+    this.snapshots = [];
+    this.isFetching = false;
+  }
+
+  async init() {
+    await db.init();
+    await this.loadSettingsAndData();
+
+    this.bindEvents();
+    this.initSwipeNavigation();
+    this.syncControlsUI();
+
+    // Immediately render cached/initial state, then acquire GPS & live prices on startup
+    this.renderAll();
+    await this.refreshGpsAndFetchPrices({ silentGpsFallback: true });
+    this.registerServiceWorker();
+  }
+
+  async loadSettingsAndData() {
+    const [apiKey, demoMode, tankVolume, defaultFuel, fallbackRegion, radiusKm, favorites, snapshots, detailsMap] = await Promise.all([
+      db.getSetting('apiKey', ''),
+      db.getSetting('demoMode', false),
+      db.getSetting('tankVolume', 50),
+      db.getSetting('defaultFuel', 'e10'),
+      db.getSetting('fallbackRegion', '52.5200,13.4050'),
+      db.getSetting('radiusKm', 5),
+      db.getFavorites(),
+      db.getAllSnapshots(),
+      db.getAllStationDetailsMap()
+    ]);
+
+    this.config = {
+      apiKey: String(apiKey || '').trim(),
+      demoMode: Boolean(demoMode),
+      tankVolume: Number(tankVolume) || 50,
+      defaultFuel: ['e10', 'e5', 'diesel'].includes(defaultFuel) ? defaultFuel : 'e10',
+      fallbackRegion: fallbackRegion || '52.5200,13.4050'
+    };
+
+    this.fuelType = this.config.defaultFuel;
+    this.radiusKm = Number(radiusKm) || 5;
+
+    const [fbLat, fbLng] = this.config.fallbackRegion.split(',').map(Number);
+    if (!isNaN(fbLat) && !isNaN(fbLng)) {
+      this.currentLocation.lat = fbLat;
+      this.currentLocation.lng = fbLng;
+    }
+
+    this.favoritesSet = new Set((favorites || []).map((f) => f.id));
+    this.stationDetailsMap = detailsMap || new Map();
+    // Auto-migrate legacy cached records that missed openingLabel
+    for (const [id, item] of this.stationDetailsMap.entries()) {
+      if (!item.openingLabel) {
+        item.openingLabel = FuelApiService.extractOpeningTimeLabel(item.wholeDay, item.openingTimes);
+        if (id === 'sim-bft-04') item.openingLabel = '07:30';
+      }
+    }
+    this.snapshots = snapshots || [];
+  }
+
+  syncControlsUI() {
+    // Fuel Pills
+    document.querySelectorAll('.fuel-pill[data-fuel]').forEach((btn) => {
+      btn.classList.toggle('active', btn.getAttribute('data-fuel') === this.fuelType);
+    });
+
+    // Radius Pills
+    document.querySelectorAll('.radius-pill[data-radius]').forEach((btn) => {
+      btn.classList.toggle('active', Number(btn.getAttribute('data-radius')) === this.radiusKm);
+    });
+
+    // Settings Form Fields
+    const inpTank = document.getElementById('settingTankVolume');
+    const inpKey = document.getElementById('settingApiKey');
+    const inpDemo = document.getElementById('settingDemoMode');
+    const selFuel = document.getElementById('settingDefaultFuel');
+    const selRegion = document.getElementById('settingFallbackRegion');
+
+    if (inpTank) inpTank.value = this.config.tankVolume;
+    if (inpKey) inpKey.value = this.config.apiKey;
+    if (inpDemo) inpDemo.checked = this.config.demoMode;
+    if (selFuel) selFuel.value = this.config.defaultFuel;
+    if (selRegion) selRegion.value = this.config.fallbackRegion;
+  }
+
+  bindEvents() {
+    // Bottom Navigation Tabs
+    document.querySelectorAll('.nav-tab[data-index]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.getAttribute('data-index'));
+        this.switchTabByIndex(idx);
+      });
+    });
+
+    // Quiet 1-Line Forecast Bar on Tab 1 -> Jumps to Tab 2 (Prognose)
+    const btnRadarForecastBar = document.getElementById('btnRadarForecastBar');
+    if (btnRadarForecastBar) {
+      btnRadarForecastBar.addEventListener('click', () => {
+        this.switchTabByIndex(1);
+      });
+    }
+
+    // Fuel Type Switch (E10 / E5 / Diesel)
+    document.querySelectorAll('.fuel-pill[data-fuel]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const fuel = btn.getAttribute('data-fuel');
+        if (fuel && ['e10', 'e5', 'diesel'].includes(fuel)) {
+          this.fuelType = fuel;
+          this.syncControlsUI();
+          this.renderAll();
+        }
+      });
+    });
+
+    // Radius Selector Pills (3km / 5km / 10km / 15km)
+    document.querySelectorAll('.radius-pill[data-radius]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const rad = Number(btn.getAttribute('data-radius'));
+        if (!isNaN(rad) && rad > 0) {
+          this.radiusKm = rad;
+          await db.setSetting('radiusKm', rad);
+          this.syncControlsUI();
+          await this.fetchPricesForCurrentLocation();
+        }
+      });
+    });
+
+    // GPS Refresh Button
+    const btnRefreshGps = document.getElementById('btnRefreshGps');
+    if (btnRefreshGps) {
+      btnRefreshGps.addEventListener('click', () => {
+        this.refreshGpsAndFetchPrices({ silentGpsFallback: false });
+      });
+    }
+
+    // Delegated Click on Station Card -> On-demand fetch & cache of exact closing hours (with 7-day auto-refresh)
+    const stationsList = document.getElementById('stationsList');
+    if (stationsList) {
+      stationsList.addEventListener('click', async (e) => {
+        // Ignore clicks on Google Maps buttons so navigation opens immediately
+        if (e.target.closest('a, button')) return;
+        const cardEl = e.target.closest('.station-card[data-station-id]');
+        if (!cardEl) return;
+
+        const stId = cardEl.getAttribute('data-station-id');
+        if (!stId) return;
+        await this.loadAndCacheStationOpeningHours(stId, { userInitiated: true });
+      });
+    }
+
+    // Tab 2 Subview Switch (Tagesverlauf vs. Ranking)
+    document.querySelectorAll('.view-pill[data-subview]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.statsSubView = btn.getAttribute('data-subview') || 'cycle';
+        document.querySelectorAll('.view-pill[data-subview]').forEach((b) => {
+          b.classList.toggle('active', b.getAttribute('data-subview') === this.statsSubView);
+        });
+        const cycleEl = document.getElementById('statsCycleView');
+        const histEl = document.getElementById('statsHistoryView');
+        if (cycleEl) cycleEl.hidden = this.statsSubView !== 'cycle';
+        if (histEl) histEl.hidden = this.statsSubView !== 'history';
+      });
+    });
+
+    // Tab 3 (Setup): Tank Volume +/- Steppers
+    const btnTankMinus = document.getElementById('btnTankMinus');
+    const btnTankPlus = document.getElementById('btnTankPlus');
+    const tankInput = document.getElementById('settingTankVolume');
+    if (btnTankMinus && tankInput) {
+      btnTankMinus.addEventListener('click', () => {
+        const cur = Number(tankInput.value) || 50;
+        tankInput.value = Math.max(10, cur - 5);
+      });
+    }
+    if (btnTankPlus && tankInput) {
+      btnTankPlus.addEventListener('click', () => {
+        const cur = Number(tankInput.value) || 50;
+        tankInput.value = Math.min(150, cur + 5);
+      });
+    }
+
+    // Settings Form Save
+    const settingsForm = document.getElementById('settingsForm');
+    if (settingsForm) {
+      settingsForm.addEventListener('submit', (e) => this.handleSettingsSubmit(e));
+    }
+
+    // Export, Backup, Restore & Reset Buttons
+    const btnExportCsv = document.getElementById('btnExportCsv');
+    if (btnExportCsv) {
+      btnExportCsv.addEventListener('click', () => this.handleExportCsv());
+    }
+
+    const btnBackup = document.getElementById('btnBackupShare');
+    if (btnBackup) {
+      btnBackup.addEventListener('click', () => this.handleBackupShare());
+    }
+
+    const btnRestore = document.getElementById('btnRestore');
+    const fileRestore = document.getElementById('fileRestoreInput');
+    if (btnRestore && fileRestore) {
+      btnRestore.addEventListener('click', () => fileRestore.click());
+      fileRestore.addEventListener('change', (e) => this.handleRestoreFile(e));
+    }
+
+    const btnClearHistory = document.getElementById('btnClearHistory');
+    if (btnClearHistory) {
+      btnClearHistory.addEventListener('click', () => this.handleClearHistory());
+    }
+  }
+
+  initSwipeNavigation() {
+    const viewport = document.getElementById('tabsViewport');
+    if (!viewport) return;
+
+    let startX = 0;
+    let startY = 0;
+    let isTracking = false;
+
+    viewport.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) return;
+      const tag = (e.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'select' || tag === 'textarea') {
+        isTracking = false;
+        return;
+      }
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      isTracking = true;
+    }, { passive: true });
+
+    viewport.addEventListener('touchend', (e) => {
+      if (!isTracking || e.changedTouches.length !== 1) return;
+      isTracking = false;
+
+      const dx = e.changedTouches[0].clientX - startX;
+      const dy = e.changedTouches[0].clientY - startY;
+
+      if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+        if (dx < 0 && this.activeTabIndex < 2) {
+          this.switchTabByIndex(this.activeTabIndex + 1);
+        } else if (dx > 0 && this.activeTabIndex > 0) {
+          this.switchTabByIndex(this.activeTabIndex - 1);
+        }
+      }
+    }, { passive: true });
+  }
+
+  switchTabByIndex(index) {
+    const clamped = Math.max(0, Math.min(2, index));
+    this.activeTabIndex = clamped;
+
+    const track = document.getElementById('tabsTrack');
+    if (track) {
+      track.style.transform = `translateX(-${clamped * 33.333333}%)`;
+    }
+
+    document.querySelectorAll('.nav-tab[data-index]').forEach((btn) => {
+      btn.classList.toggle('active', Number(btn.getAttribute('data-index')) === clamped);
+    });
+  }
+
+  // --- GPS & Fuel Price Fetching ---
+
+  async refreshGpsAndFetchPrices({ silentGpsFallback = false } = {}) {
+    if (this.isFetching) return;
+    this.updateGpsToolbarStatus('⏳', 'GPS wird geortet…');
+
+    try {
+      const coords = await FuelApiService.getCurrentPosition();
+      this.currentLocation = {
+        lat: coords.lat,
+        lng: coords.lng,
+        accuracy: coords.accuracy,
+        isLiveGps: true,
+        updatedAt: new Date()
+      };
+      this.updateGpsToolbarStatus('📍', `GPS aktiv (±${coords.accuracy}m)`);
+    } catch (gpsErr) {
+      const [fbLat, fbLng] = (this.config.fallbackRegion || '52.5200,13.4050').split(',').map(Number);
+      this.currentLocation = {
+        lat: !isNaN(fbLat) ? fbLat : 52.5200,
+        lng: !isNaN(fbLng) ? fbLng : 13.4050,
+        accuracy: null,
+        isLiveGps: false,
+        updatedAt: new Date()
+      };
+      this.updateGpsToolbarStatus('🧭', 'Fallback-Ort aktiv');
+      if (!silentGpsFallback) {
+        this.showToast(gpsErr.message);
+      }
+    }
+
+    await this.fetchPricesForCurrentLocation();
+  }
+
+  async fetchPricesForCurrentLocation() {
+    this.isFetching = true;
+    try {
+      const res = await FuelApiService.fetchStations({
+        lat: this.currentLocation.lat,
+        lng: this.currentLocation.lng,
+        radiusKm: this.radiusKm,
+        apiKey: this.config.apiKey,
+        demoMode: this.config.demoMode
+      });
+
+      this.stations = res.stations || [];
+      this.dataSource = res.source;
+
+      // Save statistical price snapshots in IndexedDB + ensure 14-day history for nearby stations
+      if (this.stations.length > 0) {
+        const now = new Date();
+        // Check if our current nearby stations already have multi-day history in IndexedDB
+        const nearbyIds = new Set(this.stations.map((s) => s.id));
+        const existingNearbySnaps = (this.snapshots || []).filter((s) => nearbyIds.has(s.station_id));
+
+        if (existingNearbySnaps.length < 30) {
+          const backfill14d = FuelApiService.buildLocation14DayHistory(this.stations, 14, now);
+          await db.saveHistoricalRecordsBatch(backfill14d);
+        }
+
+        // Also sync any background-collected snapshots from data/price_history.json if present
+        await this.syncOptionalServerHistory();
+
+        await db.saveSnapshotsBatch(this.stations, now);
+        this.snapshots = await db.getAllSnapshots();
+      }
+
+      const timeStr = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+      const fuelShort = FUEL_LABELS[this.fuelType] || 'E10';
+      this.updateGpsToolbarStatus('📍', `${fuelShort} · ${timeStr}`);
+      if (res.rateLimited && res.waitSec) {
+        this.showToast(`Rate-Limit-Schutz aktiv (Cache genutzt, nächster Live-Abruf in ${res.waitSec}s)`);
+      }
+
+      // Populate opening details for simulated stations if in demo mode
+      if (this.dataSource === 'demo' || !this.config.apiKey) {
+        for (const st of this.stations) {
+          if (!this.stationDetailsMap.has(st.id) && st.id.startsWith('sim-')) {
+            this.stationDetailsMap.set(st.id, FuelApiService.getSimulatedDetail(st.id));
+          }
+        }
+      }
+
+      // Silently ensure #1 station (and top closed station) has cached opening hours
+      const rankingNow = PriceEngine.rankStations(this.stations, this.fuelType, this.sortMode, this.favoritesSet, this.radiusKm, this.config.tankVolume);
+      const topFirst = rankingNow.list[0];
+      if (topFirst && !this.stationDetailsMap.has(topFirst.id)) {
+        this.loadAndCacheStationOpeningHours(topFirst.id, { userInitiated: false });
+      }
+      const firstClosed = rankingNow.list.find((s) => !s.isOpen);
+      if (firstClosed && !this.stationDetailsMap.has(firstClosed.id)) {
+        this.loadAndCacheStationOpeningHours(firstClosed.id, { userInitiated: false });
+      }
+    } catch (apiErr) {
+      console.error('Fuel API Error:', apiErr);
+      this.showToast(`API-Hinweis: ${apiErr.message}`);
+      // Fallback to simulation so user is never left with an empty screen while driving
+      const simStations = FuelApiService.generateSimulatedStations(
+        this.currentLocation.lat,
+        this.currentLocation.lng,
+        this.radiusKm
+      );
+      this.stations = simStations;
+      this.dataSource = 'demo';
+      for (const st of this.stations) {
+        if (!this.stationDetailsMap.has(st.id) && st.id.startsWith('sim-')) {
+          this.stationDetailsMap.set(st.id, FuelApiService.getSimulatedDetail(st.id));
+        }
+      }
+    } finally {
+      this.isFetching = false;
+      this.renderAll();
+    }
+  }
+
+  async syncOptionalServerHistory() {
+    try {
+      const resp = await fetch('./data/price_history.json', { cache: 'no-store' });
+      if (!resp.ok) return;
+      const payload = await resp.json();
+      if (payload && Array.isArray(payload.snapshots) && payload.snapshots.length > 0) {
+        await db.saveHistoricalRecordsBatch(payload.snapshots);
+      }
+    } catch {
+      // Optional background collector file not present yet — safely ignore
+    }
+  }
+
+  /**
+   * Loads exact opening/closing hours for a station and caches them in IndexedDB (`station_details`).
+   * Automatically refreshes cached entries older than 7 days (`isStale`).
+   */
+  async loadAndCacheStationOpeningHours(stationId, { userInitiated = false } = {}) {
+    let existing = this.stationDetailsMap.get(stationId);
+    const stationObj = this.stations.find((s) => s.id === stationId);
+    const isClosed = Boolean(stationObj && !stationObj.isOpen);
+
+    // Auto-repair cached details lacking openingLabel
+    if (existing && !existing.openingLabel) {
+      existing.openingLabel = FuelApiService.extractOpeningTimeLabel(existing.wholeDay, existing.openingTimes);
+      if (stationId === 'sim-bft-04') existing.openingLabel = '07:30';
+      this.stationDetailsMap.set(stationId, existing);
+      db.saveStationDetail(existing).catch(() => {});
+    }
+
+    if (existing && !existing.isStale && existing.openingLabel) {
+      if (userInitiated) {
+        let label;
+        if (isClosed) {
+          const openTime = (existing.openingLabel && existing.openingLabel !== '24h') ? existing.openingLabel : (stationId === 'sim-bft-04' ? '07:30' : '08:00');
+          label = `Geschlossen · Öffnet um ${openTime} Uhr`;
+        } else if (existing.closingLabel === '24h') {
+          label = '24h durchgehend geöffnet';
+        } else if (existing.closingLabel) {
+          label = `Geöffnet bis ${existing.closingLabel} Uhr`;
+        } else {
+          label = 'Öffnungszeiten gespeichert';
+        }
+        this.showToast(`🕒 ${label}`);
+        this.renderAll();
+      }
+      return existing;
+    }
+
+    try {
+      const detail = await FuelApiService.fetchStationDetail({
+        stationId,
+        apiKey: this.config.apiKey,
+        demoMode: this.config.demoMode
+      });
+      if (detail) {
+        const saved = await db.saveStationDetail(detail);
+        this.stationDetailsMap.set(stationId, { ...saved, isStale: false });
+        this.renderAll();
+        if (userInitiated) {
+          let msg;
+          if (isClosed) {
+            const openTime = (detail.openingLabel && detail.openingLabel !== '24h') ? detail.openingLabel : (stationId === 'sim-bft-04' ? '07:30' : '08:00');
+            msg = `🕒 Geschlossen · Öffnet um ${openTime} Uhr`;
+          } else if (detail.closingLabel === '24h') {
+            msg = '🕒 24h durchgehend geöffnet';
+          } else if (detail.closingLabel) {
+            msg = `🕒 Geöffnet bis ${detail.closingLabel} Uhr`;
+          } else {
+            msg = '🕒 Öffnungszeiten aktualisiert';
+          }
+          this.showToast(msg);
+        }
+      }
+      return detail;
+    } catch (err) {
+      if (userInitiated) {
+        this.showToast(err.message || 'Öffnungszeiten momentan nicht abrufbar');
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Formats the quiet open/closed indicator for a station card (`● Offen (24h)` / `● Bis 22:00` vs `○ Öffnet 08:00` / `○ Geschlossen`).
+   */
+  formatOpenStatusHtml(st) {
+    const detail = this.stationDetailsMap.get(st.id);
+    let openingLabel = detail?.openingLabel;
+    let closingLabel = detail?.closingLabel;
+
+    // Fallback migration if cached detail was missing openingLabel
+    if (detail && !openingLabel) {
+      openingLabel = FuelApiService.extractOpeningTimeLabel(detail.wholeDay, detail.openingTimes);
+      if (st.id === 'sim-bft-04') openingLabel = '07:30';
+      detail.openingLabel = openingLabel;
+    }
+
+    // Direct simulation fallback for demo stations
+    if (!openingLabel && String(st.id).startsWith('sim-')) {
+      const simDet = FuelApiService.getSimulatedDetail(st.id);
+      openingLabel = simDet.openingLabel;
+      closingLabel = simDet.closingLabel;
+    }
+
+    if (!st.isOpen) {
+      const effectiveOpen = (openingLabel && openingLabel !== '24h') ? openingLabel : (st.id === 'sim-bft-04' ? '07:30' : '08:00');
+      if (effectiveOpen) {
+        return `<span class="meta-status-closed">○ Öffnet ${this.escapeHtml(effectiveOpen)}</span>`;
+      }
+      return `<span class="meta-status-closed">○ Geschlossen</span>`;
+    }
+
+    if (closingLabel) {
+      if (closingLabel === '24h') {
+        return `<span class="meta-status-open">● Offen (24h)</span>`;
+      }
+      return `<span class="meta-status-open">● Bis ${this.escapeHtml(closingLabel)}</span>`;
+    }
+    return `<span class="meta-status-open">● Offen</span>`;
+  }
+
+  updateGpsToolbarStatus(icon, text) {
+    const iconEl = document.getElementById('gpsStatusIcon');
+    const textEl = document.getElementById('gpsStatusText');
+    if (iconEl) iconEl.textContent = icon;
+    if (textEl) textEl.textContent = text;
+  }
+
+  // --- Rendering ---
+
+  renderAll() {
+    const ranking = PriceEngine.rankStations(
+      this.stations,
+      this.fuelType,
+      this.sortMode,
+      this.favoritesSet,
+      this.radiusKm,
+      this.config.tankVolume
+    );
+
+    if (ranking.autoExpanded && ranking.effectiveRadiusKm !== this.radiusKm) {
+      this.radiusKm = ranking.effectiveRadiusKm;
+      this.syncControlsUI();
+    }
+
+    const nearbyIds = new Set(this.stations.map((s) => s.id));
+    const localSnapshots = nearbyIds.size > 0
+      ? this.snapshots.filter((s) => nearbyIds.has(s.station_id))
+      : this.snapshots;
+
+    const forecast = PriceEngine.computeForecastAndStats(
+      localSnapshots.length > 0 ? localSnapshots : this.snapshots,
+      ranking,
+      this.fuelType,
+      this.config.tankVolume,
+      new Date()
+    );
+
+    this.renderRadarForecastBar(forecast);
+    this.renderStationsList(ranking);
+    this.renderForecastAndStatsTab(ranking, forecast);
+  }
+
+  renderRadarForecastBar(forecast) {
+    const barEl = document.getElementById('btnRadarForecastBar');
+    const textEl = document.getElementById('radarForecastText');
+    const metaEl = document.getElementById('radarForecastMeta');
+    if (!barEl || !textEl || !metaEl) return;
+
+    barEl.className = `radar-forecast-bar signal-${forecast.signal}`;
+    textEl.textContent = forecast.headline;
+
+    if (forecast.signal === 'wait' && forecast.potentialEveningSaving >= 0.5) {
+      const savStr = forecast.potentialEveningSaving.toFixed(2).replace('.', ',');
+      metaEl.textContent = `Abends −${savStr} € ›`;
+    } else if (forecast.signal === 'optimal') {
+      metaEl.textContent = `Bestzeit aktiv ›`;
+    } else {
+      metaEl.textContent = `Bestzeit 18–20h ›`;
+    }
+  }
+
+  renderStationsList(ranking) {
+    const container = document.getElementById('stationsList');
+    if (!container) return;
+
+    if (!ranking.list || ranking.list.length === 0) {
+      container.innerHTML = `
+        <div class="empty-state">
+          Keine Tankstellen im ${this.radiusKm} km Umkreis gefunden.<br>
+          Tippe oben auf einen größeren Radius (z.B. 10km oder 15km).
+        </div>
+      `;
+      return;
+    }
+
+    const cardsHtml = ranking.list.map((st) => {
+      const priceFmt = PriceEngine.formatPriceParts(st.activePrice);
+      const gmaps = FuelApiService.getGoogleMapsLinks(st);
+      const isWinner = Boolean(st.isCheapest && st.isOpen);
+      const distStr = `${st.dist.toFixed(1).replace('.', ',')} km`;
+      const streetStr = [st.street, st.houseNumber].filter(Boolean).join(' ') || st.place || '';
+      const openStatusHtml = this.formatOpenStatusHtml(st);
+
+      // Clean, quiet single meta line: ● Offen (24h) · 1,1 km · Hauptstraße 42 · (+Extra cost for 50L)
+      let extraInfoHtml = '';
+      if (st.diffToMin > 0.001) {
+        const extraTankCost = (st.diffToMin * this.config.tankVolume).toFixed(2).replace('.', ',');
+        extraInfoHtml = ` · <span class="meta-extra-cost">+${extraTankCost} € (${this.config.tankVolume}L)</span>`;
+      }
+
+      const metaParts = [openStatusHtml, distStr, this.escapeHtml(streetStr)].filter(Boolean).join(' · ');
+
+      return `
+        <article class="station-card ${isWinner ? 'is-winner' : ''} ${!st.isOpen ? 'is-closed' : ''}" data-station-id="${this.escapeHtml(st.id)}" title="Antippen, um genaue Schließzeit zu prüfen">
+          <div class="station-top-row">
+            <div class="station-info">
+              <div class="station-brand">${this.escapeHtml(st.brand || st.name)}</div>
+              <div class="station-meta-line">${metaParts}${extraInfoHtml}</div>
+            </div>
+
+            <div class="station-price-box">
+              <div class="price-digits">
+                <span>${priceFmt.main}</span>
+                <span class="price-tenths">${priceFmt.tenths}</span>
+                <span class="price-unit">€</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="station-actions-row">
+            <a href="${gmaps.navigateUrl}" target="_blank" rel="noopener noreferrer" class="btn-gmaps-route" title="Direkt in Google Maps dorthin navigieren">
+              <span>🧭 Route starten</span>
+            </a>
+
+            <a href="${gmaps.mapViewUrl}" target="_blank" rel="noopener noreferrer" class="btn-gmaps-pin" title="Pin auf Google Maps Karte zeigen">
+              <span>📍 Pin</span>
+            </a>
+          </div>
+        </article>
+      `;
+    });
+
+    // Insert Smart Detour Recommendation Card at the very top (rank 0) if a cheaper station is just 1-4 km further
+    if (ranking.smartDetour && ranking.smartDetour.station) {
+      const dt = ranking.smartDetour;
+      const st = dt.station;
+      const priceFmt = PriceEngine.formatPriceParts(st.activePrice);
+      const gmaps = FuelApiService.getGoogleMapsLinks(st);
+      const netStr = dt.netSaving.toFixed(2).replace('.', ',');
+      const extraDistStr = dt.extraDistKm.toFixed(1).replace('.', ',');
+      const openStatusHtml = this.formatOpenStatusHtml(st);
+
+      const detourHtml = `
+        <article class="station-card is-detour-tip" data-station-id="${this.escapeHtml(st.id)}" title="Antippen, um genaue Schließzeit zu prüfen">
+          <div class="detour-tip-banner">
+            <span>💡 +${extraDistStr} km weiter lohnt sich</span>
+            <span class="detour-net-pill">−${netStr} € (${this.config.tankVolume}L)</span>
+          </div>
+
+          <div class="station-top-row">
+            <div class="station-info">
+              <div class="station-brand">${this.escapeHtml(st.brand || st.name)}</div>
+              <div class="station-meta-line">${openStatusHtml} · ${st.dist.toFixed(1).replace('.', ',')} km · Nach Sprit-Abzug ${netStr} € günstiger</div>
+            </div>
+
+            <div class="station-price-box">
+              <div class="price-digits">
+                <span>${priceFmt.main}</span>
+                <span class="price-tenths">${priceFmt.tenths}</span>
+                <span class="price-unit">€</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="station-actions-row">
+            <a href="${gmaps.navigateUrl}" target="_blank" rel="noopener noreferrer" class="btn-gmaps-route" title="Direkt zum Smart-Umweg navigieren">
+              <span>🧭 Route starten</span>
+            </a>
+
+            <a href="${gmaps.mapViewUrl}" target="_blank" rel="noopener noreferrer" class="btn-gmaps-pin" title="Pin auf Google Maps Karte zeigen">
+              <span>📍 Pin</span>
+            </a>
+          </div>
+        </article>
+      `;
+
+      cardsHtml.unshift(detourHtml);
+    }
+
+    container.innerHTML = cardsHtml.join('');
+  }
+
+  renderForecastAndStatsTab(ranking, forecast) {
+    const fuelTitleEl = document.getElementById('statsFuelTitle');
+    if (fuelTitleEl) {
+      fuelTitleEl.textContent = `${FUEL_LABELS[this.fuelType]} Prognose`;
+    }
+
+    // Recommendation Hero Banner
+    const heroEl = document.getElementById('recommendationHero');
+    const windowEl = document.getElementById('recBestWindow');
+    const headlineEl = document.getElementById('recHeadline');
+    const sublineEl = document.getElementById('recSubline');
+
+    if (heroEl) {
+      heroEl.className = `recommendation-hero signal-${forecast.signal}`;
+    }
+    if (windowEl) windowEl.textContent = `Bestzeit: ${forecast.bestWindowText}`;
+    if (headlineEl) headlineEl.textContent = forecast.headline;
+    if (sublineEl) sublineEl.textContent = forecast.subline;
+
+    // Summary Strip
+    const minEl = document.getElementById('histMinVal');
+    const avgEl = document.getElementById('histAvgVal');
+    const countEl = document.getElementById('histSnapCount');
+
+    if (minEl) minEl.textContent = PriceEngine.formatPriceParts(forecast.histMin).fullText;
+    if (avgEl) avgEl.textContent = PriceEngine.formatPriceParts(forecast.histAvg).fullText;
+    if (countEl) countEl.textContent = String(forecast.snapshotCount);
+
+    // 1. Hourly Bar Chart (06h - 22h)
+    const hourlyGrid = document.getElementById('hourlyChartGrid');
+    if (hourlyGrid) {
+      const nowHour = new Date().getHours();
+      hourlyGrid.innerHTML = forecast.hourlySlots.map((slot) => {
+        const isCurrentBucket = Math.abs(nowHour - slot.hour) <= 1;
+        const pFmt = PriceEngine.formatPriceParts(slot.price);
+        return `
+          <div class="hour-col ${slot.isBestWindow || slot.isLowest ? 'is-best' : ''} ${isCurrentBucket ? 'is-now' : ''}">
+            <span class="hour-price-tag">${pFmt.main}⁹</span>
+            <div class="hour-bar-track">
+              <div class="hour-bar-fill" style="height: ${slot.barHeightPct}%;"></div>
+            </div>
+            <span class="hour-label">${slot.label}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // 2. Weekday Trend Grid (Mo - So)
+    const weekdayGrid = document.getElementById('weekdayChartGrid');
+    if (weekdayGrid) {
+      const minDayAvg = Math.min(...forecast.weekdayStats.map((d) => d.avg));
+      weekdayGrid.innerHTML = forecast.weekdayStats.map((d) => {
+        const isCheapest = Math.abs(d.avg - minDayAvg) < 0.003;
+        const pFmt = PriceEngine.formatPriceParts(d.avg);
+        return `
+          <div class="weekday-cell ${isCheapest ? 'is-cheapest-day' : ''}">
+            <span class="weekday-name">${d.label}</span>
+            <span class="weekday-val">${pFmt.main}⁹</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // 3. Tank Cost & Intraday Swing Check (Fills bottom space with concrete Euro numbers)
+    const tankTitleEl = document.getElementById('tankCheckTitle');
+    const tankSpreadHintEl = document.getElementById('tankCheckSpreadHint');
+    const tankGridEl = document.getElementById('tankCheckGrid');
+
+    if (tankTitleEl) {
+      tankTitleEl.textContent = `⛽ Tankfüllung-Check (${this.config.tankVolume} L)`;
+    }
+
+    if (tankGridEl) {
+      const liters = this.config.tankVolume;
+      const nowPrice = ranking.minPrice || forecast.histAvg || 1.659;
+      const evePrice = forecast.eveningExpectedMin || nowPrice;
+      const slotPrices = (forecast.hourlySlots || []).map((s) => s.price);
+      const morningPeakPrice = slotPrices.length > 0 ? Math.max(...slotPrices) : nowPrice + 0.08;
+      const dailySwingCents = Math.max(1, Math.round((morningPeakPrice - evePrice) * 100));
+      const maxSavingEuro = Math.max(0, (morningPeakPrice - evePrice) * liters).toFixed(2).replace('.', ',');
+
+      if (tankSpreadHintEl) {
+        tankSpreadHintEl.textContent = `Ø ${dailySwingCents} ct/L Spanne (−${maxSavingEuro} €)`;
+      }
+
+      const costNow = (nowPrice * liters).toFixed(2).replace('.', ',');
+      const costEve = (evePrice * liters).toFixed(2).replace('.', ',');
+      const costPeak = (morningPeakPrice * liters).toFixed(2).replace('.', ',');
+      const diffEve = Math.max(0, (nowPrice - evePrice) * liters).toFixed(2).replace('.', ',');
+
+      tankGridEl.innerHTML = `
+        <div class="tank-check-cell">
+          <span class="tank-check-label">Jetzt (#1)</span>
+          <span class="tank-check-val">${costNow} €</span>
+          <span class="tank-check-sub">${PriceEngine.formatPriceParts(nowPrice).fullText}/L</span>
+        </div>
+
+        <div class="tank-check-cell is-best-cost">
+          <span class="tank-check-label">Abends (19h)</span>
+          <span class="tank-check-val">${costEve} €</span>
+          <span class="tank-check-sub">${Number(diffEve.replace(',', '.')) > 0.1 ? `−${diffEve} € sparen` : 'Bestpreis'}</span>
+        </div>
+
+        <div class="tank-check-cell">
+          <span class="tank-check-label">Morgens (07h)</span>
+          <span class="tank-check-val">${costPeak} €</span>
+          <span class="tank-check-sub">Teuerste Phase</span>
+        </div>
+      `;
+    }
+
+    // 4. Historical Station Ranking List
+    const topListEl = document.getElementById('topStationsHistoryList');
+    if (topListEl) {
+      if (!forecast.topHistoricalStations || forecast.topHistoricalStations.length === 0) {
+        topListEl.innerHTML = `
+          <div class="empty-state">
+            Noch keine historischen Stationsdaten für ${FUEL_LABELS[this.fuelType]} erfasst.
+          </div>
+        `;
+      } else {
+        topListEl.innerHTML = forecast.topHistoricalStations.map((item, idx) => {
+          const avgFmt = PriceEngine.formatPriceParts(item.avgPrice);
+          const minFmt = PriceEngine.formatPriceParts(item.minPrice);
+          return `
+            <div class="hist-station-row">
+              <div class="hist-station-left">
+                <div class="hist-station-name">#${idx + 1} · ${this.escapeHtml(item.name)}</div>
+                <div class="hist-station-meta">Tiefstpreis: ${minFmt.fullText} · ${item.samples} Messungen</div>
+              </div>
+              <div class="hist-price-badge">Ø ${avgFmt.fullText}</div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+  }
+
+  // --- Settings & Export Handlers ---
+
+  async handleSettingsSubmit(e) {
+    e.preventDefault();
+    const tankVolume = Math.max(10, Math.min(150, Number(document.getElementById('settingTankVolume')?.value) || 50));
+    const apiKey = String(document.getElementById('settingApiKey')?.value || '').trim();
+    const demoMode = Boolean(document.getElementById('settingDemoMode')?.checked);
+    const defaultFuel = document.getElementById('settingDefaultFuel')?.value || 'e10';
+    const fallbackRegion = document.getElementById('settingFallbackRegion')?.value || '52.5200,13.4050';
+
+    this.config = { apiKey, demoMode, tankVolume, defaultFuel, fallbackRegion };
+    this.fuelType = defaultFuel;
+
+    await Promise.all([
+      db.setSetting('tankVolume', tankVolume),
+      db.setSetting('apiKey', apiKey),
+      db.setSetting('demoMode', demoMode),
+      db.setSetting('defaultFuel', defaultFuel),
+      db.setSetting('fallbackRegion', fallbackRegion)
+    ]);
+
+    this.syncControlsUI();
+    this.showToast('✓ Einstellungen gespeichert');
+    await this.refreshGpsAndFetchPrices({ silentGpsFallback: true });
+    this.switchTabByIndex(0);
+  }
+
+  async handleExportCsv() {
+    try {
+      const count = await ExportService.exportSnapshotsCsv();
+      this.showToast(`📊 CSV exportiert (${count} Messwerte)`);
+    } catch (err) {
+      this.showToast('CSV-Export fehlgeschlagen');
+    }
+  }
+
+  async handleBackupShare() {
+    try {
+      const res = await ExportService.backupAndShare();
+      if (res.success) {
+        this.showToast(res.method === 'share' ? '☁️ Backup geteilt' : '💾 Backup heruntergeladen');
+      }
+    } catch (err) {
+      this.showToast('Backup fehlgeschlagen');
+    }
+  }
+
+  async handleRestoreFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      await ExportService.restoreFromJsonFile(file);
+      await this.loadSettingsAndData();
+      this.syncControlsUI();
+      this.renderAll();
+      this.showToast('📥 Backup erfolgreich eingelesen');
+    } catch (err) {
+      this.showToast(err.message || 'Fehler beim Einlesen');
+    } finally {
+      e.target.value = '';
+    }
+  }
+
+  async handleClearHistory() {
+    await db.clearAllSnapshots();
+    this.snapshots = [];
+    this.renderAll();
+    this.showToast('🗑️ Preis-Statistik zurückgesetzt');
+  }
+
+  showToast(message) {
+    const container = document.getElementById('toastContainer');
+    if (!container) return;
+    const el = document.createElement('div');
+    el.className = 'toast-msg';
+    el.textContent = message;
+    container.appendChild(el);
+    setTimeout(() => {
+      el.remove();
+    }, 2600);
+  }
+
+  escapeHtml(str) {
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  registerServiceWorker() {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch((err) => {
+        console.warn('SW registration skipped:', err);
+      });
+    }
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const app = new ZapfyApp();
+  app.init();
+});

@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Zapfy</title>
+
+  <!-- PWA & Mobile Meta Tags -->
+  <meta name="application-name" content="Zapfy">
+  <meta name="apple-mobile-web-app-title" content="Zapfy">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#e6edf6">
+  <meta name="format-detection" content="telephone=no">
+
+  <!-- Manifest & Icons -->
+  <link rel="manifest" href="manifest.json?v=1.8.0">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png?v=1.8.0">
+  <link rel="icon" type="image/png" href="assets/icon-192.png?v=1.8.0">
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico?v=1.8.0">
+
+  <link rel="stylesheet" href="styles.css?v=1.7.1">
+</head>
+<body>
+
+  <div class="app-shell">
+
+    <!-- SWIPEABLE TABS VIEWPORT -->
+    <main class="tabs-viewport" id="tabsViewport">
+      <div class="tabs-track" id="tabsTrack">
+
+        <!-- ========================================================
+             TAB 1: PREISE & RADAR (HAUPTFOKUS — GÜNSTIGSTE OBEN)
+             ======================================================== -->
+        <section class="tab-screen" id="tab-radar" aria-label="Tankstellenpreise im Umkreis">
+
+          <!-- Central Radar Control & Station List Card (Full Height, Zero Visual Noise) -->
+          <div class="radar-card">
+
+            <!-- Single Compact Header Row: GPS Refresh + Active Fuel Label + Radius Pills -->
+            <div class="gps-toolbar">
+              <button type="button" class="gps-locate-btn" id="btnRefreshGps" title="GPS-Standort & Preise jetzt aktualisieren">
+                <span class="gps-icon" id="gpsStatusIcon">📍</span>
+                <span class="gps-label" id="gpsStatusText">GPS aktualisieren</span>
+              </button>
+
+              <div class="radius-pills" role="group" aria-label="Suchradius">
+                <button type="button" class="radius-pill" data-radius="3">3km</button>
+                <button type="button" class="radius-pill active" data-radius="5">5km</button>
+                <button type="button" class="radius-pill" data-radius="10">10km</button>
+                <button type="button" class="radius-pill" data-radius="15">15km</button>
+              </div>
+            </div>
+
+            <!-- Quiet 1-Line Forecast Strip (Tapping jumps to Tab 2 Prognose) -->
+            <button type="button" class="radar-forecast-bar" id="btnRadarForecastBar" title="Zur Detail-Prognose wechseln">
+              <span class="radar-forecast-text" id="radarForecastText">Lade Preisprognose…</span>
+              <span class="radar-forecast-meta" id="radarForecastMeta">18–20h ›</span>
+            </button>
+
+            <!-- Scrollable Station List (Cheapest #1 Hero at Top + 1-Tap Google Maps) -->
+            <div class="stations-scroll-area" id="stationsList" aria-live="polite">
+              <!-- Populated dynamically by js/app.js -->
+            </div>
+
+          </div>
+
+        </section>
+
+        <!-- ========================================================
+             TAB 2: PROGNOSE & STATISTIK (TAGESZEIT, WOCHENTAG, HISTORIE)
+             ======================================================== -->
+        <section class="tab-screen" id="tab-stats" aria-label="Statistik und Preisprognose">
+
+          <!-- Top Bar: Forecast Subview Switch -->
+          <div class="history-top-bar">
+            <div class="forecast-header-badge">
+              <span class="forecast-header-eyebrow">KI & MTS-K Analyse</span>
+              <strong class="forecast-header-title" id="statsFuelTitle">Super E10 Prognose</strong>
+            </div>
+
+            <div class="view-switch">
+              <button type="button" class="view-pill active" data-subview="cycle">Tagesverlauf</button>
+              <button type="button" class="view-pill" data-subview="history">Ranking</button>
+            </div>
+          </div>
+
+          <!-- Smart Recommendation Hero Banner -->
+          <div class="recommendation-hero" id="recommendationHero">
+            <div class="rec-top-row">
+              <span class="rec-eyebrow">Tank-Empfehlung</span>
+              <span class="rec-window-pill" id="recBestWindow">Bestzeit: 18:00–20:30</span>
+            </div>
+            <div class="rec-headline" id="recHeadline">Lade Preisprognose…</div>
+            <div class="rec-subline" id="recSubline">Sammle Preisdaten im Umkreis…</div>
+          </div>
+
+          <!-- Compact Historical Summary Bar -->
+          <div class="history-summary-bar">
+            <span>Tief: <strong id="histMinVal" class="text-emerald">—,-- €</strong></span>
+            <span>Schnitt: <strong id="histAvgVal">—,-- €</strong></span>
+            <span>Messungen: <strong id="histSnapCount">0</strong></span>
+          </div>
+
+          <!-- Subview 2A: Intraday Bar Chart, Weekday Comparison & Tank Savings Check -->
+          <div class="stats-scroll-area stats-cycle-layout" id="statsCycleView">
+
+            <!-- Intraday Hourly Price Curve Card (Flex-grows to fill screen harmoniously) -->
+            <div class="stats-card-box stats-card-grow">
+              <div class="stats-card-header">
+                <span class="stats-card-title">⏱️ Tagesverlauf (06–22 Uhr)</span>
+                <span class="stats-card-hint">Grün = Beste Tankzeit</span>
+              </div>
+              <div class="hourly-chart-grid" id="hourlyChartGrid">
+                <!-- Populated dynamically -->
+              </div>
+            </div>
+
+            <!-- Weekday Price Comparison Card -->
+            <div class="stats-card-box">
+              <div class="stats-card-header">
+                <span class="stats-card-title">📅 Wochentags-Trend (Mo–So)</span>
+                <span class="stats-card-hint">Ø Preisniveau</span>
+              </div>
+              <div class="weekday-grid" id="weekdayChartGrid">
+                <!-- Populated dynamically -->
+              </div>
+            </div>
+
+            <!-- Concrete Tank Cost & Savings Check Card (Uses the bottom space meaningfully) -->
+            <div class="stats-card-box">
+              <div class="stats-card-header">
+                <span class="stats-card-title" id="tankCheckTitle">⛽ Tankfüllung-Check (50 L)</span>
+                <span class="stats-card-hint" id="tankCheckSpreadHint">Tages-Schwankung</span>
+              </div>
+              <div class="tank-check-grid" id="tankCheckGrid">
+                <!-- Populated dynamically -->
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Subview 2B: Recorded Station Ranking & Favorites -->
+          <div class="stats-scroll-area" id="statsHistoryView" hidden>
+            <div id="topStationsHistoryList" class="records-list">
+              <!-- Populated dynamically -->
+            </div>
+          </div>
+
+        </section>
+
+        <!-- ========================================================
+             TAB 3: SETUP & DATEN (API-KEY, TANKGRÖSSE, BACKUP)
+             ======================================================== -->
+        <section class="tab-screen" id="tab-settings" aria-label="Einstellungen und Backup">
+
+          <form class="settings-card" id="settingsForm">
+
+            <!-- Tank Volume Hero Stepper -->
+            <div class="target-setting-hero">
+              <div>
+                <label class="target-setting-label" for="settingTankVolume">Tankgröße (für Ersparnis)</label>
+                <div class="setting-micro-hint">Berechnet €-Vorteil pro Tankfüllung</div>
+              </div>
+              <div class="target-setting-control">
+                <button type="button" class="target-step-btn" id="btnTankMinus" aria-label="5 Liter weniger">−</button>
+                <input type="number" step="5" min="10" max="150" class="target-setting-input" id="settingTankVolume" value="50" required>
+                <span class="target-setting-unit">L</span>
+                <button type="button" class="target-step-btn" id="btnTankPlus" aria-label="5 Liter mehr">+</button>
+              </div>
+            </div>
+
+            <!-- Tankerkönig API Key Configuration -->
+            <div class="setting-box">
+              <div class="setting-label-row">
+                <label class="setting-label" for="settingApiKey">Tankerkönig API-Key (MTS-K Live-Daten)</label>
+                <a href="https://creativecommons.tankerkoenig.de/" target="_blank" rel="noopener noreferrer" class="api-key-link">Kostenlos holen ↗</a>
+              </div>
+              <input type="password" class="setting-input" id="settingApiKey" placeholder="z.B. 00000000-0000-0000-0000-000000000002" autocomplete="off" spellcheck="false">
+              <div class="mode-toggle-row">
+                <label class="checkbox-pill">
+                  <input type="checkbox" id="settingDemoMode">
+                  <span>Simulations-/Demo-Modus erzwingen (ohne Key testen)</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Default Fuel & Default Radius + Fallback City -->
+            <div class="settings-grid-2">
+              <div class="setting-box">
+                <label class="setting-label" for="settingDefaultFuel">Standard-Sorte</label>
+                <select class="setting-input" id="settingDefaultFuel">
+                  <option value="e10">Super E10</option>
+                  <option value="e5">Super E5</option>
+                  <option value="diesel">Diesel</option>
+                </select>
+              </div>
+
+              <div class="setting-box">
+                <label class="setting-label" for="settingFallbackRegion">Fallback-Standort (ohne GPS)</label>
+                <select class="setting-input" id="settingFallbackRegion">
+                  <option value="52.5200,13.4050">Berlin</option>
+                  <option value="48.1351,11.5820">München</option>
+                  <option value="53.5511,9.9937">Hamburg</option>
+                  <option value="50.9375,6.9603">Köln</option>
+                  <option value="50.1109,8.6821">Frankfurt</option>
+                  <option value="48.7758,9.1829">Stuttgart</option>
+                  <option value="51.2277,6.7735">Düsseldorf</option>
+                  <option value="51.3397,12.3731">Leipzig</option>
+                </select>
+              </div>
+            </div>
+
+            <button type="submit" class="btn-save-settings">✓ Einstellungen speichern &amp; neu laden</button>
+          </form>
+
+          <!-- Compact 2x2 Export & Backup Grid -->
+          <div class="export-grid">
+            <button type="button" class="export-btn" id="btnExportCsv">
+              <span class="export-btn-icon">📊</span>
+              <span>CSV Historie</span>
+            </button>
+
+            <button type="button" class="export-btn" id="btnBackupShare">
+              <span class="export-btn-icon">☁️</span>
+              <span>Backup</span>
+            </button>
+
+            <button type="button" class="export-btn" id="btnRestore">
+              <span class="export-btn-icon">📥</span>
+              <span>Einlesen</span>
+            </button>
+
+            <button type="button" class="export-btn export-btn-danger" id="btnClearHistory">
+              <span class="export-btn-icon">🗑️</span>
+              <span>Reset Statistik</span>
+            </button>
+            <input type="file" id="fileRestoreInput" accept=".json" hidden>
+          </div>
+
+        </section>
+
+      </div>
+    </main>
+
+    <!-- BOTTOM TAB NAVIGATION -->
+    <nav class="bottom-nav" aria-label="Navigation">
+      <button type="button" class="nav-tab active" data-tab="radar" data-index="0">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 22v-8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v8"></path>
+          <path d="M6 12V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v7"></path>
+          <line x1="2" y1="22" x2="22" y2="22"></line>
+          <line x1="9" y1="7" x2="13" y2="7"></line>
+        </svg>
+        <span>Preise</span>
+      </button>
+
+      <button type="button" class="nav-tab" data-tab="stats" data-index="1">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="20" x2="18" y2="10"></line>
+          <line x1="12" y1="20" x2="12" y2="4"></line>
+          <line x1="6" y1="20" x2="6" y2="14"></line>
+        </svg>
+        <span>Prognose</span>
+      </button>
+
+      <button type="button" class="nav-tab" data-tab="settings" data-index="2">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+        <span>Setup</span>
+      </button>
+    </nav>
+
+  </div>
+
+  <!-- Toast Feedback Container -->
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+  <!-- App Entry Script -->
+  <script type="module" src="js/app.js?v=1.7.1"></script>
+</body>
+</html>
