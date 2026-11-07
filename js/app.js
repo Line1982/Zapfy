@@ -247,6 +247,20 @@ class ZapfyApp {
       });
     }
 
+    // Delegated Click on Historical Station Row in Tab 2 -> On-demand opening hours check
+    const topStationsList = document.getElementById('topStationsHistoryList');
+    if (topStationsList) {
+      topStationsList.addEventListener('click', async (e) => {
+        if (e.target.closest('a, button')) return;
+        const rowEl = e.target.closest('.hist-station-row[data-station-id]');
+        if (!rowEl) return;
+
+        const stId = rowEl.getAttribute('data-station-id');
+        if (!stId) return;
+        await this.loadAndCacheStationOpeningHours(stId, { userInitiated: true });
+      });
+    }
+
     // Tab 2 Subview Switch (Tagesverlauf vs. Ranking)
     document.querySelectorAll('.view-pill[data-subview]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -961,7 +975,7 @@ class ZapfyApp {
       `;
     }
 
-    // 4. Historical Station Ranking List
+    // 4. Historical Station Ranking List (Tab 2: Ranking Subview)
     const topListEl = document.getElementById('topStationsHistoryList');
     if (topListEl) {
       if (!forecast.topHistoricalStations || forecast.topHistoricalStations.length === 0) {
@@ -972,15 +986,53 @@ class ZapfyApp {
         `;
       } else {
         topListEl.innerHTML = forecast.topHistoricalStations.map((item, idx) => {
+          const liveStation = this.stations.find((s) => s.id === item.stationId);
+          const stObj = liveStation || {
+            id: item.stationId,
+            name: item.name,
+            brand: item.name,
+            place: item.place,
+            street: item.street,
+            houseNumber: item.houseNumber,
+            lat: item.lat,
+            lng: item.lng,
+            dist: item.dist,
+            isOpen: true
+          };
+
           const avgFmt = PriceEngine.formatPriceParts(item.avgPrice);
           const minFmt = PriceEngine.formatPriceParts(item.minPrice);
+          const gmaps = FuelApiService.getGoogleMapsLinks(stObj);
+          const openStatusHtml = liveStation ? this.formatOpenStatusHtml(liveStation) : '';
+          const distStr = typeof stObj.dist === 'number' && stObj.dist > 0 ? `${stObj.dist.toFixed(1).replace('.', ',')} km` : '';
+          const streetStr = [stObj.street, stObj.houseNumber].filter(Boolean).join(' ') || stObj.place || '';
+
+          const metaParts = [
+            openStatusHtml,
+            distStr ? `<span>${this.escapeHtml(distStr)}</span>` : '',
+            streetStr ? `<span>${this.escapeHtml(streetStr)}</span>` : '',
+            `<span>Tief: ${minFmt.fullText}</span>`,
+            `<span>${item.samples}×</span>`
+          ].filter(Boolean).join(' · ');
+
+          const stationName = liveStation ? (liveStation.brand || liveStation.name) : item.name;
+
           return `
-            <div class="hist-station-row">
+            <div class="hist-station-row" data-station-id="${this.escapeHtml(item.stationId || '')}" title="Antippen, um genaue Öffnungszeiten zu prüfen">
               <div class="hist-station-left">
-                <div class="hist-station-name">#${idx + 1} · ${this.escapeHtml(item.name)}</div>
-                <div class="hist-station-meta">Tiefstpreis: ${minFmt.fullText} · ${item.samples} Messungen</div>
+                <div class="hist-station-name">#${idx + 1} · ${this.escapeHtml(stationName)}</div>
+                <div class="hist-station-meta">${metaParts}</div>
               </div>
-              <div class="hist-price-badge">Ø ${avgFmt.fullText}</div>
+              <div class="hist-station-right">
+                <div class="hist-price-badge">Ø ${avgFmt.fullText}</div>
+                <a href="${gmaps.mapViewUrl}" target="_blank" rel="noopener noreferrer" class="btn-gmaps-pin btn-hist-pin" title="Pin auf Google Maps Karte zeigen" onclick="event.stopPropagation();">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                    <circle cx="12" cy="10" r="3"></circle>
+                  </svg>
+                  <span>Pin</span>
+                </a>
+              </div>
             </div>
           `;
         }).join('');

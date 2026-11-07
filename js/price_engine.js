@@ -372,7 +372,7 @@ export class PriceEngine {
     const daySums = new Array(8).fill(0);
     const dayCounts = new Array(8).fill(0);
 
-    // Station brand ranking
+    // Station ranking (keyed by station_id if available, fallback to brand/name)
     const brandMap = new Map();
 
     for (const s of validSnaps) {
@@ -393,14 +393,33 @@ export class PriceEngine {
         dayCounts[d]++;
       }
 
-      const brandKey = (s.station_name || 'Tankstelle').trim();
-      if (!brandMap.has(brandKey)) {
-        brandMap.set(brandKey, { name: brandKey, sum: 0, count: 0, min: p });
+      const stationKey = s.station_id || (s.station_name || 'Tankstelle').trim();
+      if (!brandMap.has(stationKey)) {
+        brandMap.set(stationKey, {
+          stationId: s.station_id || null,
+          name: (s.station_name || 'Tankstelle').trim(),
+          place: s.place || '',
+          street: s.street || '',
+          houseNumber: s.houseNumber || '',
+          lat: typeof s.lat === 'number' ? s.lat : null,
+          lng: typeof s.lng === 'number' ? s.lng : null,
+          dist: typeof s.dist === 'number' ? s.dist : null,
+          sum: 0,
+          count: 0,
+          min: p
+        });
       }
-      const bEntry = brandMap.get(brandKey);
+      const bEntry = brandMap.get(stationKey);
       bEntry.sum += p;
       bEntry.count++;
       if (p < bEntry.min) bEntry.min = p;
+      if (!bEntry.stationId && s.station_id) bEntry.stationId = s.station_id;
+      if (!bEntry.place && s.place) bEntry.place = s.place;
+      if (!bEntry.street && s.street) bEntry.street = s.street;
+      if (!bEntry.houseNumber && s.houseNumber) bEntry.houseNumber = s.houseNumber;
+      if (bEntry.lat === null && typeof s.lat === 'number') bEntry.lat = s.lat;
+      if (bEntry.lng === null && typeof s.lng === 'number') bEntry.lng = s.lng;
+      if (bEntry.dist === null && typeof s.dist === 'number') bEntry.dist = s.dist;
     }
 
     const histAvg = validSnaps.length > 0 ? Number((histSum / validSnaps.length).toFixed(3)) : currentAvg;
@@ -490,16 +509,23 @@ export class PriceEngine {
       subline = `Aktuelles Minimum (${this.formatPriceParts(currentMin).fullText}) liegt unter dem gespeicherten Durchschnitt (${this.formatPriceParts(histAvg).fullText}).`;
     }
 
-    // 5. Top Cheapest Recorded Brands/Stations from History
+    // 5. Top Cheapest Recorded Stations from History
     const topHistoricalStations = Array.from(brandMap.values())
       .map((b) => ({
+        stationId: b.stationId,
         name: b.name,
+        place: b.place,
+        street: b.street,
+        houseNumber: b.houseNumber,
+        lat: b.lat,
+        lng: b.lng,
+        dist: b.dist,
         avgPrice: Number((b.sum / b.count).toFixed(3)),
         minPrice: b.min,
         samples: b.count
       }))
       .sort((a, b) => a.avgPrice - b.avgPrice)
-      .slice(0, 6);
+      .slice(0, 8);
 
     return {
       snapshotCount: validSnaps.length,

@@ -4,7 +4,7 @@
  * Live Tankerkönig API calls bypass the static cache so fuel prices are always fresh.
  */
 
-const CACHE_NAME = 'zapfy-cache-v1.10.0';
+const CACHE_NAME = 'zapfy-cache-v1.11.0';
 
 const ASSETS_TO_CACHE = [
   './',

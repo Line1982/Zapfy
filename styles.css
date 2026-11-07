@@ -1240,13 +1240,20 @@ html, body {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.hist-station-row:active {
+  transform: scale(0.985);
 }
 
 .hist-station-left {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
+  flex: 1;
 }
 
 .hist-station-name {
@@ -1259,17 +1266,36 @@ html, body {
 }
 
 .hist-station-meta {
-  font-size: 0.76rem;
+  font-size: 0.74rem;
   font-weight: 600;
   color: var(--text-muted);
+  line-height: 1.35;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.hist-station-right {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+
+.btn-hist-pin {
+  height: 36px;
+  padding: 0 9px;
+  font-size: 0.76rem;
+  border-radius: 10px;
 }
 
 .hist-price-badge {
   background: var(--primary-soft);
   color: var(--primary);
-  font-size: 0.96rem;
+  font-size: 0.92rem;
   font-weight: 900;
-  padding: 6px 11px;
+  padding: 6px 10px;
   border-radius: 10px;
   flex-shrink: 0;
 }

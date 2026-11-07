@@ -547,16 +547,18 @@ export class FuelApiService {
   static getGoogleMapsLinks(station) {
     const lat = Number(station.lat);
     const lng = Number(station.lng);
-    const coords = `${lat},${lng}`;
-    const labelQuery = encodeURIComponent(
-      `${station.brand || station.name} ${station.street || ''} ${station.houseNumber || ''} ${station.place || ''}`.trim()
-    );
+    const hasCoords = !isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0;
+    const label = `${station.brand || station.name || 'Tankstelle'} ${station.street || ''} ${station.houseNumber || ''} ${station.place || ''}`.trim();
+    const labelQuery = encodeURIComponent(label);
+    const destination = hasCoords ? `${lat},${lng}` : labelQuery;
 
     return {
       // Starts turn-by-turn route guidance immediately or offers "Add stop" in active Google Maps navigation
-      navigateUrl: `https://www.google.com/maps/dir/?api=1&destination=${coords}&travelmode=driving`,
+      navigateUrl: `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=driving`,
       // Opens the exact station pin on the Google Maps canvas to inspect detour relative to current route
-      mapViewUrl: `https://www.google.com/maps/search/?api=1&query=${coords}`,
+      mapViewUrl: hasCoords
+        ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`
+        : `https://www.google.com/maps/search/?api=1&query=${labelQuery}`,
       labelQuery
     };
   }
@@ -675,6 +677,10 @@ export class FuelApiService {
       id: st.id,
       name: st.brand || st.name || 'Tankstelle',
       place: st.place || '',
+      street: st.street || '',
+      houseNumber: st.houseNumber || '',
+      lat: typeof st.lat === 'number' ? st.lat : null,
+      lng: typeof st.lng === 'number' ? st.lng : null,
       dist: st.dist,
       baseE10: typeof st.e10 === 'number' ? st.e10 - currentHourOffset - currentDayOffset : null,
       baseE5: typeof st.e5 === 'number' ? st.e5 - currentHourOffset - currentDayOffset : null,
@@ -706,6 +712,10 @@ export class FuelApiService {
             station_id: sb.id,
             station_name: sb.name,
             place: sb.place,
+            street: sb.street,
+            houseNumber: sb.houseNumber,
+            lat: sb.lat,
+            lng: sb.lng,
             timestamp: isoTs,
             date: dateStr,
             hour: h,
