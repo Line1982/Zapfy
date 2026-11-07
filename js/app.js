@@ -112,11 +112,6 @@ class ZapfyApp {
   }
 
   syncControlsUI() {
-    // Fuel Pills
-    document.querySelectorAll('.fuel-pill[data-fuel]').forEach((btn) => {
-      btn.classList.toggle('active', btn.getAttribute('data-fuel') === this.fuelType);
-    });
-
     // Sort Pills (Smart / Preis / Nähe)
     document.querySelectorAll('.sort-pill[data-sort]').forEach((btn) => {
       btn.classList.toggle('active', btn.getAttribute('data-sort') === this.sortMode);
@@ -191,18 +186,6 @@ class ZapfyApp {
         this.switchTabByIndex(1);
       });
     }
-
-    // Fuel Type Switch (E10 / E5 / Diesel)
-    document.querySelectorAll('.fuel-pill[data-fuel]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const fuel = btn.getAttribute('data-fuel');
-        if (fuel && ['e10', 'e5', 'diesel'].includes(fuel)) {
-          this.fuelType = fuel;
-          this.syncControlsUI();
-          this.renderAll();
-        }
-      });
-    });
 
     // Sort Selector Pills (Smart / Preis / Nähe)
     document.querySelectorAll('.sort-pill[data-sort]').forEach((btn) => {

@@ -138,62 +138,7 @@ html, body {
 }
 
 /* ==========================================================================
-   TOP STATUS STRIP (3 METRIC BOXES)
-   ========================================================================== */
-
-.status-strip {
-  display: grid;
-  grid-template-columns: 1.25fr 1fr 1fr;
-  gap: 9px;
-  flex-shrink: 0;
-}
-
-.status-box {
-  background: linear-gradient(180deg, #ffffff 0%, #f6f9fd 100%);
-  border-radius: var(--radius-lg);
-  padding: 10px 12px;
-  box-shadow: var(--shadow-card);
-  border: 1px solid rgba(255, 255, 255, 0.85);
-  outline: 1px solid var(--border-subtle);
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  min-width: 0;
-}
-
-.status-label {
-  font-size: 0.7rem;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-  margin-bottom: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.status-value {
-  font-size: 1.26rem;
-  font-weight: 900;
-  color: var(--text-main);
-  letter-spacing: -0.02em;
-  line-height: 1.15;
-  white-space: nowrap;
-}
-
-.status-subtext {
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--text-muted);
-  margin-top: 3px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* ==========================================================================
-   TAB 1: RADAR CARD, FUEL SWITCH, GPS TOOLBAR & STATION LIST
+   TAB 1: RADAR CARD, GPS TOOLBAR & STATION LIST
    ========================================================================== */
 
 .radar-card {
@@ -211,79 +156,7 @@ html, body {
   overflow: hidden;
 }
 
-.mode-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  background: var(--amber-soft);
-  color: #92400e;
-  padding: 7px 11px;
-  border-radius: var(--radius-sm);
-  font-size: 0.78rem;
-  font-weight: 800;
-  flex-shrink: 0;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
-}
-
-.mode-banner[hidden] {
-  display: none !important;
-}
-
-.btn-banner-action {
-  background: #ffffff;
-  border: none;
-  color: var(--text-main);
-  font-weight: 800;
-  font-size: 0.74rem;
-  padding: 4px 9px;
-  border-radius: var(--radius-full);
-  box-shadow: var(--shadow-pill-raised);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-/* Segmented 3-Way Fuel Type Switch (E10 / E5 / Diesel) */
-.fuel-switch {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  width: 100%;
-  background: var(--bg-well);
-  border-radius: var(--radius-md);
-  padding: 4px;
-  gap: 4px;
-  box-shadow: var(--shadow-well);
-  flex-shrink: 0;
-}
-
-.fuel-pill {
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  font-family: inherit;
-  font-weight: 800;
-  font-size: 0.88rem;
-  height: 38px;
-  padding: 0 8px;
-  border-radius: 12px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  white-space: nowrap;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.fuel-pill.active {
-  background: linear-gradient(180deg, #5e56f8 0%, #4338ca 100%);
-  color: #ffffff;
-  box-shadow:
-    0 4px 10px -2px rgba(67, 56, 202, 0.42),
-    inset 0 1px 0 rgba(255, 255, 255, 0.35),
-    inset 0 -1.5px 0 rgba(0, 0, 0, 0.2);
-}
-
-/* GPS & Radius Toolbar */
+/* GPS & Sort Toolbar */
 .gps-toolbar {
   display: flex;
   align-items: center;

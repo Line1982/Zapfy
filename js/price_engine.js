@@ -27,19 +27,6 @@ export class PriceEngine {
   }
 
   /**
-   * Calculates compass bearing in degrees [0..360) from coordinate 1 to coordinate 2.
-   */
-  static calculateBearingDeg(lat1, lng1, lat2, lng2) {
-    const phi1 = (lat1 * Math.PI) / 180;
-    const phi2 = (lat2 * Math.PI) / 180;
-    const dLambda = ((lng2 - lng1) * Math.PI) / 180;
-    const y = Math.sin(dLambda) * Math.cos(phi2);
-    const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLambda);
-    const theta = (Math.atan2(y, x) * 180) / Math.PI;
-    return (theta + 360) % 360;
-  }
-
-  /**
    * Dynamically filters and ranks stations by selected fuel type ('e10', 'e5', 'diesel')
    * and sort mode ('smart', 'price', 'dist', 'fav') without requiring manual radius steps.
    *
@@ -106,7 +93,7 @@ export class PriceEngine {
       let routeStatus = null; // 'ahead' | 'side' | 'behind' | null
 
       if (hasActiveHeading && typeof st.lat === 'number' && typeof st.lng === 'number' && st.dist >= 0.25) {
-        bearingDeg = this.calculateBearingDeg(travelContext.lat, travelContext.lng, st.lat, st.lng);
+        bearingDeg = FuelApiService.calculateBearingDeg(travelContext.lat, travelContext.lng, st.lat, st.lng);
         relBearingDeg = ((bearingDeg - headingDeg + 540) % 360) - 180; // [-180..+180]
         const absAngle = Math.abs(relBearingDeg);
         // Smooth cosine curve: 0 deg (ahead) -> 0.30x detour, 60 deg -> 0.58x, 90 deg -> 0.85x, 180 deg (behind) -> 1.40x
