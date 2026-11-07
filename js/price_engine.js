@@ -32,7 +32,7 @@ export class PriceEngine {
    * Also evaluates stations in the lookahead buffer (1-4 km outside radiusKm) to detect a
    * worthwhile "Smart Detour" bargain (considering gross tank savings minus extra driving fuel cost).
    */
-  static rankStations(stations, fuelType = 'e10', sortMode = 'price', favoritesSet = new Set(), radiusKm = 5, tankLiters = 50) {
+  static rankStations(stations, fuelType = 'e10', sortMode = 'price', favoritesSet = new Set(), radiusKm = 5, tankLiters = 50, consumptionL100km = 7.0) {
     if (!Array.isArray(stations)) {
       return {
         list: [],
@@ -156,8 +156,9 @@ export class PriceEngine {
         const extraDistOneWay = Math.max(0.5, Number((bestOutside.dist - referenceInsideStation.dist).toFixed(1)));
         const priceDiffPerLiter = Number((referencePrice - bestOutside.activePrice).toFixed(3));
         const grossSaving = Number((priceDiffPerLiter * tankLiters).toFixed(2));
-        // Realistic round-trip detour fuel cost (~7.0 L / 100km consumption * 2 * extraDistOneWay)
-        const detourFuelLiters = (extraDistOneWay * 2 * 7.0) / 100;
+        // Realistic round-trip detour fuel cost (vehicle consumption * 2 * extraDistOneWay)
+        const effectiveConsumption = Math.max(2.0, Math.min(25.0, Number(consumptionL100km) || 7.0));
+        const detourFuelLiters = (extraDistOneWay * 2 * effectiveConsumption) / 100;
         const detourFuelCost = Number((detourFuelLiters * bestOutside.activePrice).toFixed(2));
         const netSaving = Number((grossSaving - detourFuelCost).toFixed(2));
 
@@ -316,19 +317,19 @@ export class PriceEngine {
 
     if (currentHour >= 17 && currentHour <= 21) {
       signal = 'optimal';
-      headline = '🔥 Jetzt tanken! Abend-Tiefpreisphase aktiv';
+      headline = 'Jetzt tanken! Abend-Tiefpreisphase aktiv';
       subline = `Zwischen 18 und 21 Uhr sind die Kraftstoffpreise erfahrungsgemäß am tiefsten.`;
     } else if (currentHour >= 5 && currentHour <= 9) {
       signal = 'wait';
-      headline = '⏳ Besser warten! Aktuell Morgen-Preisspitze';
+      headline = 'Besser warten! Aktuell Morgen-Preisspitze';
       subline = `Abends (18–20 Uhr) sinkt der Preis um ca. ${(expectedDropPerLiter * 100).toFixed(0)} ct/L (≈ ${potentialEveningSaving.toFixed(2).replace('.', ',')} € pro ${tankLiters}L-Tank).`;
     } else if (expectedDropPerLiter >= 0.03) {
       signal = 'wait';
-      headline = `⏳ Nach Möglichkeit bis 18:00 Uhr warten`;
+      headline = `Nach Möglichkeit bis 18:00 Uhr warten`;
       subline = `Prognose für heute Abend: ca. ${this.formatPriceParts(eveningExpectedMin).fullText}/L (${(expectedDropPerLiter * 100).toFixed(0)} ct/L günstiger).`;
     } else if (currentMin !== null && histAvg !== null && currentMin <= histAvg - 0.015) {
       signal = 'optimal';
-      headline = '✅ Jetzt günstig! Unter deinem historischen Schnitt';
+      headline = 'Jetzt günstig! Unter deinem historischen Schnitt';
       subline = `Aktuelles Minimum (${this.formatPriceParts(currentMin).fullText}) liegt unter dem gespeicherten Durchschnitt (${this.formatPriceParts(histAvg).fullText}).`;
     }
 

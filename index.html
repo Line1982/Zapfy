@@ -19,7 +19,7 @@
   <link rel="icon" type="image/png" href="assets/icon-192.png?v=1.8.0">
   <link rel="icon" type="image/x-icon" href="assets/favicon.ico?v=1.8.0">
 
-  <link rel="stylesheet" href="styles.css?v=1.7.1">
+  <link rel="stylesheet" href="styles.css?v=1.9.0">
 </head>
 <body>
 
@@ -39,8 +39,14 @@
 
             <!-- Single Compact Header Row: GPS Refresh + Active Fuel Label + Radius Pills -->
             <div class="gps-toolbar">
-              <button type="button" class="gps-locate-btn" id="btnRefreshGps" title="GPS-Standort & Preise jetzt aktualisieren">
-                <span class="gps-icon" id="gpsStatusIcon">📍</span>
+              <button type="button" class="gps-locate-btn" id="btnRefreshGps" title="GPS-Standort &amp; Preise jetzt aktualisieren">
+                <svg class="gps-icon-svg" id="gpsStatusSvg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="8"></circle>
+                  <line x1="12" y1="2" x2="12" y2="6"></line>
+                  <line x1="12" y1="18" x2="12" y2="22"></line>
+                  <line x1="2" y1="12" x2="6" y2="12"></line>
+                  <line x1="18" y1="12" x2="22" y2="12"></line>
+                </svg>
                 <span class="gps-label" id="gpsStatusText">GPS aktualisieren</span>
               </button>
 
@@ -108,7 +114,7 @@
             <!-- Intraday Hourly Price Curve Card (Flex-grows to fill screen harmoniously) -->
             <div class="stats-card-box stats-card-grow">
               <div class="stats-card-header">
-                <span class="stats-card-title">⏱️ Tagesverlauf (06–22 Uhr)</span>
+                <span class="stats-card-title">Tagesverlauf (06–22 Uhr)</span>
                 <span class="stats-card-hint">Grün = Beste Tankzeit</span>
               </div>
               <div class="hourly-chart-grid" id="hourlyChartGrid">
@@ -119,7 +125,7 @@
             <!-- Weekday Price Comparison Card -->
             <div class="stats-card-box">
               <div class="stats-card-header">
-                <span class="stats-card-title">📅 Wochentags-Trend (Mo–So)</span>
+                <span class="stats-card-title">Wochentags-Trend (Mo–So)</span>
                 <span class="stats-card-hint">Ø Preisniveau</span>
               </div>
               <div class="weekday-grid" id="weekdayChartGrid">
@@ -130,7 +136,7 @@
             <!-- Concrete Tank Cost & Savings Check Card (Uses the bottom space meaningfully) -->
             <div class="stats-card-box">
               <div class="stats-card-header">
-                <span class="stats-card-title" id="tankCheckTitle">⛽ Tankfüllung-Check (50 L)</span>
+                <span class="stats-card-title" id="tankCheckTitle">Tankfüllung-Check (50 L)</span>
                 <span class="stats-card-hint" id="tankCheckSpreadHint">Tages-Schwankung</span>
               </div>
               <div class="tank-check-grid" id="tankCheckGrid">
@@ -150,92 +156,191 @@
         </section>
 
         <!-- ========================================================
-             TAB 3: SETUP & DATEN (API-KEY, TANKGRÖSSE, BACKUP)
+             TAB 3: SETUP & COCKPIT (FAHRZEUG, VERBRAUCH, MTS-K)
              ======================================================== -->
-        <section class="tab-screen" id="tab-settings" aria-label="Einstellungen und Backup">
+        <section class="tab-screen" id="tab-settings" aria-label="Fahrzeugprofil und Einstellungen">
 
-          <form class="settings-card" id="settingsForm">
+          <div class="setup-scroll-area">
 
-            <!-- Tank Volume Hero Stepper -->
-            <div class="target-setting-hero">
-              <div>
-                <label class="target-setting-label" for="settingTankVolume">Tankgröße (für Ersparnis)</label>
-                <div class="setting-micro-hint">Berechnet €-Vorteil pro Tankfüllung</div>
+            <form class="setup-form-flow" id="settingsForm">
+
+              <!-- Box 1: Mein Fahrzeug & Kraftstoff -->
+              <div class="setup-card-box">
+                <div class="setup-card-header">
+                  <div class="setup-card-title">
+                    <strong>Mein Fahrzeug</strong>
+                  </div>
+                  <span class="setup-card-badge">Ersparnis-Basis</span>
+                </div>
+
+                <!-- Kraftstoff-Auswahl (Große 3D-Pills) -->
+                <div class="setting-field">
+                  <label class="setting-field-label">Bevorzugter Kraftstoff</label>
+                  <div class="setup-fuel-selector" role="group" aria-label="Standard-Kraftstoffsorte">
+                    <button type="button" class="setup-fuel-pill active" data-setup-fuel="e10">Super E10</button>
+                    <button type="button" class="setup-fuel-pill" data-setup-fuel="e5">Super E5</button>
+                    <button type="button" class="setup-fuel-pill" data-setup-fuel="diesel">Diesel</button>
+                  </div>
+                  <input type="hidden" id="settingDefaultFuel" value="e10">
+                </div>
+
+                <!-- 2er Stepper-Raster: Tankgröße & Ø Verbrauch -->
+                <div class="setup-twin-steppers">
+                  <!-- Tankvolumen Stepper -->
+                  <div class="stepper-box">
+                    <div class="stepper-label-row">
+                      <label class="setting-field-label" for="settingTankVolume">Tankgröße</label>
+                      <span class="stepper-sub-hint">pro Füllung</span>
+                    </div>
+                    <div class="stepper-control">
+                      <button type="button" class="stepper-btn" id="btnTankMinus" aria-label="5 Liter weniger">−</button>
+                      <div class="stepper-display">
+                        <input type="number" step="5" min="10" max="150" class="stepper-input" id="settingTankVolume" value="50" required>
+                        <span class="stepper-unit">L</span>
+                      </div>
+                      <button type="button" class="stepper-btn" id="btnTankPlus" aria-label="5 Liter mehr">+</button>
+                    </div>
+                  </div>
+
+                  <!-- Ø Verbrauch Stepper (Eicht den Smart-Umweg-Rechner) -->
+                  <div class="stepper-box">
+                    <div class="stepper-label-row">
+                      <label class="setting-field-label" for="settingConsumption">Ø Verbrauch</label>
+                      <span class="stepper-sub-hint">Smart-Umweg</span>
+                    </div>
+                    <div class="stepper-control">
+                      <button type="button" class="stepper-btn" id="btnConsumptionMinus" aria-label="0,5 Liter weniger">−</button>
+                      <div class="stepper-display">
+                        <input type="number" step="0.5" min="2.0" max="25.0" class="stepper-input" id="settingConsumption" value="7.0" required>
+                        <span class="stepper-unit">L</span>
+                      </div>
+                      <button type="button" class="stepper-btn" id="btnConsumptionPlus" aria-label="0,5 Liter mehr">+</button>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div class="target-setting-control">
-                <button type="button" class="target-step-btn" id="btnTankMinus" aria-label="5 Liter weniger">−</button>
-                <input type="number" step="5" min="10" max="150" class="target-setting-input" id="settingTankVolume" value="50" required>
-                <span class="target-setting-unit">L</span>
-                <button type="button" class="target-step-btn" id="btnTankPlus" aria-label="5 Liter mehr">+</button>
+
+              <!-- Box 2: MTS-K & Ort -->
+              <div class="setup-card-box">
+                <div class="setup-card-header">
+                  <div class="setup-card-title">
+                    <strong>MTS-K &amp; Ort</strong>
+                  </div>
+                  <span class="setup-card-badge status-live" id="setupApiStatusBadge">
+                    <span class="status-dot"></span>
+                    <span id="setupApiStatusText">Live MTS-K</span>
+                  </span>
+                </div>
+
+                <!-- Tankerkönig API Key -->
+                <div class="setting-field">
+                  <div class="setting-label-row">
+                    <label class="setting-field-label" for="settingApiKey">Tankerkönig API-Key</label>
+                    <a href="https://creativecommons.tankerkoenig.de/" target="_blank" rel="noopener noreferrer" class="api-key-link">Kostenlos holen ↗</a>
+                  </div>
+                  <input type="password" class="setting-input" id="settingApiKey" placeholder="z.B. 00000000-0000-0000-0000-000000000002" autocomplete="off" spellcheck="false">
+                  <div class="mode-toggle-row">
+                    <label class="checkbox-pill">
+                      <input type="checkbox" id="settingDemoMode">
+                      <span>Simulations-/Demo-Modus erzwingen (ohne Key testen)</span>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Fallback-Ort mit GPS Übernahme -->
+                <div class="setting-field">
+                  <div class="setting-label-row">
+                    <label class="setting-field-label" for="settingFallbackRegion">Fallback-Ort (ohne GPS)</label>
+                    <button type="button" class="btn-use-gps" id="btnUseCurrentGps" title="Aktuellen GPS-Standort als Fallback übernehmen" aria-label="Aktuellen GPS-Standort übernehmen">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="8"></circle>
+                        <line x1="12" y1="2" x2="12" y2="6"></line>
+                        <line x1="12" y1="18" x2="12" y2="22"></line>
+                        <line x1="2" y1="12" x2="6" y2="12"></line>
+                        <line x1="18" y1="12" x2="22" y2="12"></line>
+                      </svg>
+                      <span>GPS übernehmen</span>
+                    </button>
+                  </div>
+                  <select class="setting-input" id="settingFallbackRegion">
+                    <option value="52.5200,13.4050">Berlin</option>
+                    <option value="48.1351,11.5820">München</option>
+                    <option value="53.5511,9.9937">Hamburg</option>
+                    <option value="50.9375,6.9603">Köln</option>
+                    <option value="50.1109,8.6821">Frankfurt</option>
+                    <option value="48.7758,9.1829">Stuttgart</option>
+                    <option value="51.2277,6.7735">Düsseldorf</option>
+                    <option value="51.3397,12.3731">Leipzig</option>
+                  </select>
+                </div>
+
+                <button type="submit" class="btn-save-settings">Einstellungen speichern &amp; neu laden</button>
+              </div>
+
+            </form>
+
+            <!-- Box 3: ℹ️ Live Cockpit Status -->
+            <div class="setup-status-grid">
+              <div class="setup-info-tile">
+                <span class="info-tile-label">App-Version</span>
+                <strong class="info-tile-value">Zapfy v1.9</strong>
+                <span class="info-tile-sub">Zero-Build PWA</span>
+              </div>
+              <div class="setup-info-tile">
+                <span class="info-tile-label">Preis-Statistik</span>
+                <strong class="info-tile-value" id="statusSnapCount">0 Punkte</strong>
+                <span class="info-tile-sub">Lokal persistiert</span>
+              </div>
+              <div class="setup-info-tile">
+                <span class="info-tile-label">Smart-Umweg</span>
+                <strong class="info-tile-value" id="statusConsumptionLabel">7,0 L / 100km</strong>
+                <span class="info-tile-sub">Fahrzeug-Profil</span>
               </div>
             </div>
 
-            <!-- Tankerkönig API Key Configuration -->
-            <div class="setting-box">
-              <div class="setting-label-row">
-                <label class="setting-label" for="settingApiKey">Tankerkönig API-Key (MTS-K Live-Daten)</label>
-                <a href="https://creativecommons.tankerkoenig.de/" target="_blank" rel="noopener noreferrer" class="api-key-link">Kostenlos holen ↗</a>
+            <!-- Box 4: Datenverwaltung & Backup (Kompakt & Dezent) -->
+            <div class="setup-compact-tools">
+              <div class="compact-tools-header">
+                <span>Erweiterte Datenverwaltung</span>
               </div>
-              <input type="password" class="setting-input" id="settingApiKey" placeholder="z.B. 00000000-0000-0000-0000-000000000002" autocomplete="off" spellcheck="false">
-              <div class="mode-toggle-row">
-                <label class="checkbox-pill">
-                  <input type="checkbox" id="settingDemoMode">
-                  <span>Simulations-/Demo-Modus erzwingen (ohne Key testen)</span>
-                </label>
+              <div class="compact-tools-row">
+                <button type="button" class="compact-tool-btn" id="btnExportCsv" title="Preishistorie als Excel-CSV exportieren">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                    <polyline points="10 9 9 9 8 9"></polyline>
+                  </svg>
+                  <span>CSV Export</span>
+                </button>
+                <button type="button" class="compact-tool-btn" id="btnBackupShare" title="Backup-Datei teilen oder herunterladen">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                  </svg>
+                  <span>Backup</span>
+                </button>
+                <button type="button" class="compact-tool-btn" id="btnRestore" title="Backup einlesen">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                  </svg>
+                  <span>Restore</span>
+                </button>
+                <button type="button" class="compact-tool-btn btn-tool-danger" id="btnClearHistory" title="Gespeicherte Preis-Statistik zurücksetzen">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                  </svg>
+                  <span>Reset</span>
+                </button>
               </div>
+              <input type="file" id="fileRestoreInput" accept=".json" hidden>
             </div>
 
-            <!-- Default Fuel & Default Radius + Fallback City -->
-            <div class="settings-grid-2">
-              <div class="setting-box">
-                <label class="setting-label" for="settingDefaultFuel">Standard-Sorte</label>
-                <select class="setting-input" id="settingDefaultFuel">
-                  <option value="e10">Super E10</option>
-                  <option value="e5">Super E5</option>
-                  <option value="diesel">Diesel</option>
-                </select>
-              </div>
-
-              <div class="setting-box">
-                <label class="setting-label" for="settingFallbackRegion">Fallback-Standort (ohne GPS)</label>
-                <select class="setting-input" id="settingFallbackRegion">
-                  <option value="52.5200,13.4050">Berlin</option>
-                  <option value="48.1351,11.5820">München</option>
-                  <option value="53.5511,9.9937">Hamburg</option>
-                  <option value="50.9375,6.9603">Köln</option>
-                  <option value="50.1109,8.6821">Frankfurt</option>
-                  <option value="48.7758,9.1829">Stuttgart</option>
-                  <option value="51.2277,6.7735">Düsseldorf</option>
-                  <option value="51.3397,12.3731">Leipzig</option>
-                </select>
-              </div>
-            </div>
-
-            <button type="submit" class="btn-save-settings">✓ Einstellungen speichern &amp; neu laden</button>
-          </form>
-
-          <!-- Compact 2x2 Export & Backup Grid -->
-          <div class="export-grid">
-            <button type="button" class="export-btn" id="btnExportCsv">
-              <span class="export-btn-icon">📊</span>
-              <span>CSV Historie</span>
-            </button>
-
-            <button type="button" class="export-btn" id="btnBackupShare">
-              <span class="export-btn-icon">☁️</span>
-              <span>Backup</span>
-            </button>
-
-            <button type="button" class="export-btn" id="btnRestore">
-              <span class="export-btn-icon">📥</span>
-              <span>Einlesen</span>
-            </button>
-
-            <button type="button" class="export-btn export-btn-danger" id="btnClearHistory">
-              <span class="export-btn-icon">🗑️</span>
-              <span>Reset Statistik</span>
-            </button>
-            <input type="file" id="fileRestoreInput" accept=".json" hidden>
           </div>
 
         </section>
@@ -279,6 +384,6 @@
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
   <!-- App Entry Script -->
-  <script type="module" src="js/app.js?v=1.7.1"></script>
+  <script type="module" src="js/app.js?v=1.9.0"></script>
 </body>
 </html>

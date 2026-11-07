@@ -28,6 +28,7 @@ class ZapfyApp {
       apiKey: '',
       demoMode: false,
       tankVolume: 50,
+      consumption: 7.0,
       defaultFuel: 'e10',
       fallbackRegion: '52.5200,13.4050'
     };
@@ -63,10 +64,11 @@ class ZapfyApp {
   }
 
   async loadSettingsAndData() {
-    const [apiKey, demoMode, tankVolume, defaultFuel, fallbackRegion, radiusKm, favorites, snapshots, detailsMap] = await Promise.all([
+    const [apiKey, demoMode, tankVolume, consumption, defaultFuel, fallbackRegion, radiusKm, favorites, snapshots, detailsMap] = await Promise.all([
       db.getSetting('apiKey', ''),
       db.getSetting('demoMode', false),
       db.getSetting('tankVolume', 50),
+      db.getSetting('consumption', 7.0),
       db.getSetting('defaultFuel', 'e10'),
       db.getSetting('fallbackRegion', '52.5200,13.4050'),
       db.getSetting('radiusKm', 5),
@@ -79,6 +81,7 @@ class ZapfyApp {
       apiKey: String(apiKey || '').trim(),
       demoMode: Boolean(demoMode),
       tankVolume: Number(tankVolume) || 50,
+      consumption: Number(consumption) > 0 ? Number(consumption) : 7.0,
       defaultFuel: ['e10', 'e5', 'diesel'].includes(defaultFuel) ? defaultFuel : 'e10',
       fallbackRegion: fallbackRegion || '52.5200,13.4050'
     };
@@ -117,16 +120,55 @@ class ZapfyApp {
 
     // Settings Form Fields
     const inpTank = document.getElementById('settingTankVolume');
+    const inpConsumption = document.getElementById('settingConsumption');
     const inpKey = document.getElementById('settingApiKey');
     const inpDemo = document.getElementById('settingDemoMode');
     const selFuel = document.getElementById('settingDefaultFuel');
     const selRegion = document.getElementById('settingFallbackRegion');
 
     if (inpTank) inpTank.value = this.config.tankVolume;
+    if (inpConsumption) inpConsumption.value = Number(this.config.consumption || 7.0).toFixed(1);
     if (inpKey) inpKey.value = this.config.apiKey;
     if (inpDemo) inpDemo.checked = this.config.demoMode;
     if (selFuel) selFuel.value = this.config.defaultFuel;
-    if (selRegion) selRegion.value = this.config.fallbackRegion;
+
+    // Setup Fuel Pills
+    document.querySelectorAll('.setup-fuel-pill[data-setup-fuel]').forEach((btn) => {
+      btn.classList.toggle('active', btn.getAttribute('data-setup-fuel') === this.config.defaultFuel);
+    });
+
+    // Fallback Region Select
+    if (selRegion && this.config.fallbackRegion) {
+      let opt = selRegion.querySelector(`option[value="${this.config.fallbackRegion}"]`);
+      if (!opt) {
+        let customOpt = selRegion.querySelector('#optCustomFallback');
+        if (!customOpt) {
+          customOpt = document.createElement('option');
+          customOpt.id = 'optCustomFallback';
+          selRegion.insertBefore(customOpt, selRegion.firstChild);
+        }
+        customOpt.value = this.config.fallbackRegion;
+        const [lat, lng] = this.config.fallbackRegion.split(',').map(Number);
+        customOpt.textContent = `Mein Standort (${!isNaN(lat) ? lat.toFixed(4) : ''}, ${!isNaN(lng) ? lng.toFixed(4) : ''})`;
+      }
+      selRegion.value = this.config.fallbackRegion;
+    }
+
+    // Live Cockpit Status Cards on Setup Tab
+    const statusSnaps = document.getElementById('statusSnapCount');
+    if (statusSnaps) {
+      statusSnaps.textContent = `${this.snapshots.length} Punkte`;
+    }
+    const statusCons = document.getElementById('statusConsumptionLabel');
+    if (statusCons) {
+      statusCons.textContent = `${Number(this.config.consumption || 7.0).toFixed(1).replace('.', ',')} L / 100km`;
+    }
+    const apiBadge = document.getElementById('setupApiStatusBadge');
+    if (apiBadge) {
+      const isLive = !this.config.demoMode && Boolean(this.config.apiKey);
+      apiBadge.className = `setup-card-badge ${isLive ? 'status-live' : 'status-demo'}`;
+      apiBadge.innerHTML = `<span class="status-dot"></span><span>${isLive ? 'Live MTS-K' : 'Simulationsmodus'}</span>`;
+    }
   }
 
   bindEvents() {
@@ -225,10 +267,50 @@ class ZapfyApp {
       });
     }
 
+    // Tab 3 (Setup): Consumption +/- Steppers (0.5 L steps)
+    const btnConsumptionMinus = document.getElementById('btnConsumptionMinus');
+    const btnConsumptionPlus = document.getElementById('btnConsumptionPlus');
+    const consInput = document.getElementById('settingConsumption');
+    if (btnConsumptionMinus && consInput) {
+      btnConsumptionMinus.addEventListener('click', () => {
+        const cur = Number(consInput.value) || 7.0;
+        const next = Math.max(2.0, cur - 0.5);
+        consInput.value = next.toFixed(1);
+      });
+    }
+    if (btnConsumptionPlus && consInput) {
+      btnConsumptionPlus.addEventListener('click', () => {
+        const cur = Number(consInput.value) || 7.0;
+        const next = Math.min(25.0, cur + 0.5);
+        consInput.value = next.toFixed(1);
+      });
+    }
+
+    // Tab 3 (Setup): Preferred Fuel Pills
+    document.querySelectorAll('.setup-fuel-pill[data-setup-fuel]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const fuel = btn.getAttribute('data-setup-fuel');
+        if (fuel && ['e10', 'e5', 'diesel'].includes(fuel)) {
+          this.config.defaultFuel = fuel;
+          const hiddenInput = document.getElementById('settingDefaultFuel');
+          if (hiddenInput) hiddenInput.value = fuel;
+          document.querySelectorAll('.setup-fuel-pill[data-setup-fuel]').forEach((b) => {
+            b.classList.toggle('active', b.getAttribute('data-setup-fuel') === fuel);
+          });
+        }
+      });
+    });
+
     // Settings Form Save
     const settingsForm = document.getElementById('settingsForm');
     if (settingsForm) {
       settingsForm.addEventListener('submit', (e) => this.handleSettingsSubmit(e));
+    }
+
+    // Use Current GPS Location as Fallback Button
+    const btnUseCurrentGps = document.getElementById('btnUseCurrentGps');
+    if (btnUseCurrentGps) {
+      btnUseCurrentGps.addEventListener('click', () => this.handleUseCurrentGpsAsFallback());
     }
 
     // Export, Backup, Restore & Reset Buttons
@@ -310,7 +392,7 @@ class ZapfyApp {
 
   async refreshGpsAndFetchPrices({ silentGpsFallback = false } = {}) {
     if (this.isFetching) return;
-    this.updateGpsToolbarStatus('⏳', 'GPS wird geortet…');
+    this.updateGpsToolbarStatus('loading', 'GPS wird geortet…');
 
     try {
       const coords = await FuelApiService.getCurrentPosition();
@@ -321,7 +403,7 @@ class ZapfyApp {
         isLiveGps: true,
         updatedAt: new Date()
       };
-      this.updateGpsToolbarStatus('📍', `GPS aktiv (±${coords.accuracy}m)`);
+      this.updateGpsToolbarStatus('active', `GPS aktiv (±${coords.accuracy}m)`);
     } catch (gpsErr) {
       const [fbLat, fbLng] = (this.config.fallbackRegion || '52.5200,13.4050').split(',').map(Number);
       this.currentLocation = {
@@ -331,7 +413,7 @@ class ZapfyApp {
         isLiveGps: false,
         updatedAt: new Date()
       };
-      this.updateGpsToolbarStatus('🧭', 'Fallback-Ort aktiv');
+      this.updateGpsToolbarStatus('fallback', 'Fallback-Ort aktiv');
       if (!silentGpsFallback) {
         this.showToast(gpsErr.message);
       }
@@ -375,7 +457,7 @@ class ZapfyApp {
 
       const timeStr = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
       const fuelShort = FUEL_LABELS[this.fuelType] || 'E10';
-      this.updateGpsToolbarStatus('📍', `${fuelShort} · ${timeStr}`);
+      this.updateGpsToolbarStatus('ready', `${fuelShort} · ${timeStr}`);
       if (res.rateLimited && res.waitSec) {
         this.showToast(`Rate-Limit-Schutz aktiv (Cache genutzt, nächster Live-Abruf in ${res.waitSec}s)`);
       }
@@ -390,7 +472,15 @@ class ZapfyApp {
       }
 
       // Silently ensure #1 station (and top closed station) has cached opening hours
-      const rankingNow = PriceEngine.rankStations(this.stations, this.fuelType, this.sortMode, this.favoritesSet, this.radiusKm, this.config.tankVolume);
+      const rankingNow = PriceEngine.rankStations(
+        this.stations,
+        this.fuelType,
+        this.sortMode,
+        this.favoritesSet,
+        this.radiusKm,
+        this.config.tankVolume,
+        this.config.consumption
+      );
       const topFirst = rankingNow.list[0];
       if (topFirst && !this.stationDetailsMap.has(topFirst.id)) {
         this.loadAndCacheStationOpeningHours(topFirst.id, { userInitiated: false });
@@ -464,7 +554,7 @@ class ZapfyApp {
         } else {
           label = 'Öffnungszeiten gespeichert';
         }
-        this.showToast(`🕒 ${label}`);
+        this.showToast(label);
         this.renderAll();
       }
       return existing;
@@ -484,13 +574,13 @@ class ZapfyApp {
           let msg;
           if (isClosed) {
             const openTime = (detail.openingLabel && detail.openingLabel !== '24h') ? detail.openingLabel : (stationId === 'sim-bft-04' ? '07:30' : '08:00');
-            msg = `🕒 Geschlossen · Öffnet um ${openTime} Uhr`;
+            msg = `Geschlossen · Öffnet um ${openTime} Uhr`;
           } else if (detail.closingLabel === '24h') {
-            msg = '🕒 24h durchgehend geöffnet';
+            msg = '24h durchgehend geöffnet';
           } else if (detail.closingLabel) {
-            msg = `🕒 Geöffnet bis ${detail.closingLabel} Uhr`;
+            msg = `Geöffnet bis ${detail.closingLabel} Uhr`;
           } else {
-            msg = '🕒 Öffnungszeiten aktualisiert';
+            msg = 'Öffnungszeiten aktualisiert';
           }
           this.showToast(msg);
         }
@@ -543,11 +633,16 @@ class ZapfyApp {
     return `<span class="meta-status-open">● Offen</span>`;
   }
 
-  updateGpsToolbarStatus(icon, text) {
-    const iconEl = document.getElementById('gpsStatusIcon');
+  updateGpsToolbarStatus(stateOrIcon, text) {
+    const btnEl = document.getElementById('btnRefreshGps');
     const textEl = document.getElementById('gpsStatusText');
-    if (iconEl) iconEl.textContent = icon;
-    if (textEl) textEl.textContent = text;
+    const isLocating = stateOrIcon === '⏳' || stateOrIcon === 'loading';
+    if (btnEl) {
+      btnEl.classList.toggle('is-locating', isLocating);
+    }
+    if (textEl && text) {
+      textEl.textContent = text;
+    }
   }
 
   // --- Rendering ---
@@ -559,7 +654,8 @@ class ZapfyApp {
       this.sortMode,
       this.favoritesSet,
       this.radiusKm,
-      this.config.tankVolume
+      this.config.tankVolume,
+      this.config.consumption
     );
 
     if (ranking.autoExpanded && ranking.effectiveRadiusKm !== this.radiusKm) {
@@ -654,11 +750,18 @@ class ZapfyApp {
 
           <div class="station-actions-row">
             <a href="${gmaps.navigateUrl}" target="_blank" rel="noopener noreferrer" class="btn-gmaps-route" title="Direkt in Google Maps dorthin navigieren">
-              <span>🧭 Route starten</span>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="3 11 22 2 13 21 11 13 3 11"></polygon>
+              </svg>
+              <span>Route starten</span>
             </a>
 
             <a href="${gmaps.mapViewUrl}" target="_blank" rel="noopener noreferrer" class="btn-gmaps-pin" title="Pin auf Google Maps Karte zeigen">
-              <span>📍 Pin</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                <circle cx="12" cy="10" r="3"></circle>
+              </svg>
+              <span>Pin</span>
             </a>
           </div>
         </article>
@@ -678,7 +781,13 @@ class ZapfyApp {
       const detourHtml = `
         <article class="station-card is-detour-tip" data-station-id="${this.escapeHtml(st.id)}" title="Antippen, um genaue Schließzeit zu prüfen">
           <div class="detour-tip-banner">
-            <span>💡 +${extraDistStr} km weiter lohnt sich</span>
+            <span style="display:inline-flex;align-items:center;gap:4px;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="13 17 18 12 13 7"></polyline>
+                <polyline points="6 17 11 12 6 7"></polyline>
+              </svg>
+              <span>+${extraDistStr} km weiter lohnt sich</span>
+            </span>
             <span class="detour-net-pill">−${netStr} € (${this.config.tankVolume}L)</span>
           </div>
 
@@ -699,11 +808,18 @@ class ZapfyApp {
 
           <div class="station-actions-row">
             <a href="${gmaps.navigateUrl}" target="_blank" rel="noopener noreferrer" class="btn-gmaps-route" title="Direkt zum Smart-Umweg navigieren">
-              <span>🧭 Route starten</span>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="3 11 22 2 13 21 11 13 3 11"></polygon>
+              </svg>
+              <span>Route starten</span>
             </a>
 
             <a href="${gmaps.mapViewUrl}" target="_blank" rel="noopener noreferrer" class="btn-gmaps-pin" title="Pin auf Google Maps Karte zeigen">
-              <span>📍 Pin</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                <circle cx="12" cy="10" r="3"></circle>
+              </svg>
+              <span>Pin</span>
             </a>
           </div>
         </article>
@@ -784,7 +900,7 @@ class ZapfyApp {
     const tankGridEl = document.getElementById('tankCheckGrid');
 
     if (tankTitleEl) {
-      tankTitleEl.textContent = `⛽ Tankfüllung-Check (${this.config.tankVolume} L)`;
+      tankTitleEl.textContent = `Tankfüllung-Check (${this.config.tankVolume} L)`;
     }
 
     if (tankGridEl) {
@@ -858,16 +974,18 @@ class ZapfyApp {
   async handleSettingsSubmit(e) {
     e.preventDefault();
     const tankVolume = Math.max(10, Math.min(150, Number(document.getElementById('settingTankVolume')?.value) || 50));
+    const consumption = Math.max(2.0, Math.min(25.0, Number(document.getElementById('settingConsumption')?.value) || 7.0));
     const apiKey = String(document.getElementById('settingApiKey')?.value || '').trim();
     const demoMode = Boolean(document.getElementById('settingDemoMode')?.checked);
     const defaultFuel = document.getElementById('settingDefaultFuel')?.value || 'e10';
     const fallbackRegion = document.getElementById('settingFallbackRegion')?.value || '52.5200,13.4050';
 
-    this.config = { apiKey, demoMode, tankVolume, defaultFuel, fallbackRegion };
+    this.config = { apiKey, demoMode, tankVolume, consumption, defaultFuel, fallbackRegion };
     this.fuelType = defaultFuel;
 
     await Promise.all([
       db.setSetting('tankVolume', tankVolume),
+      db.setSetting('consumption', consumption),
       db.setSetting('apiKey', apiKey),
       db.setSetting('demoMode', demoMode),
       db.setSetting('defaultFuel', defaultFuel),
@@ -875,15 +993,64 @@ class ZapfyApp {
     ]);
 
     this.syncControlsUI();
-    this.showToast('✓ Einstellungen gespeichert');
+    this.showToast('Einstellungen gespeichert');
     await this.refreshGpsAndFetchPrices({ silentGpsFallback: true });
     this.switchTabByIndex(0);
+  }
+
+  async handleUseCurrentGpsAsFallback() {
+    const btn = document.getElementById('btnUseCurrentGps');
+    const originalHtml = btn ? btn.innerHTML : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span>Ortung…</span>';
+    }
+
+    try {
+      let coords;
+      if (this.currentLocation.isLiveGps && this.currentLocation.lat && this.currentLocation.lng) {
+        coords = { lat: this.currentLocation.lat, lng: this.currentLocation.lng };
+      } else {
+        coords = await FuelApiService.getCurrentPosition();
+        this.currentLocation.lat = coords.lat;
+        this.currentLocation.lng = coords.lng;
+        this.currentLocation.accuracy = coords.accuracy;
+        this.currentLocation.isLiveGps = true;
+        this.currentLocation.updatedAt = new Date();
+      }
+
+      const val = `${coords.lat.toFixed(4)},${coords.lng.toFixed(4)}`;
+      const selRegion = document.getElementById('settingFallbackRegion');
+      if (selRegion) {
+        let customOpt = selRegion.querySelector('#optCustomFallback');
+        if (!customOpt) {
+          customOpt = document.createElement('option');
+          customOpt.id = 'optCustomFallback';
+          selRegion.insertBefore(customOpt, selRegion.firstChild);
+        }
+        customOpt.value = val;
+        customOpt.textContent = `Mein Standort (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)})`;
+        selRegion.value = val;
+      }
+
+      this.config.fallbackRegion = val;
+      await db.setSetting('fallbackRegion', val);
+
+      this.showToast(`Standort als Fallback gespeichert (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)})`);
+    } catch (err) {
+      this.showToast(err.message || 'GPS-Standort konnte nicht ermittelt werden.');
+    } finally {
+      if (btn) {
+        btn.innerHTML = originalHtml;
+        btn.disabled = false;
+      }
+    }
   }
 
   async handleExportCsv() {
     try {
       const count = await ExportService.exportSnapshotsCsv();
-      this.showToast(`📊 CSV exportiert (${count} Messwerte)`);
+      this.showToast(`CSV exportiert (${count} Messwerte)`);
     } catch (err) {
       this.showToast('CSV-Export fehlgeschlagen');
     }
@@ -893,7 +1060,7 @@ class ZapfyApp {
     try {
       const res = await ExportService.backupAndShare();
       if (res.success) {
-        this.showToast(res.method === 'share' ? '☁️ Backup geteilt' : '💾 Backup heruntergeladen');
+        this.showToast(res.method === 'share' ? 'Backup geteilt' : 'Backup heruntergeladen');
       }
     } catch (err) {
       this.showToast('Backup fehlgeschlagen');
@@ -908,7 +1075,7 @@ class ZapfyApp {
       await this.loadSettingsAndData();
       this.syncControlsUI();
       this.renderAll();
-      this.showToast('📥 Backup erfolgreich eingelesen');
+      this.showToast('Backup erfolgreich eingelesen');
     } catch (err) {
       this.showToast(err.message || 'Fehler beim Einlesen');
     } finally {
@@ -920,7 +1087,7 @@ class ZapfyApp {
     await db.clearAllSnapshots();
     this.snapshots = [];
     this.renderAll();
-    this.showToast('🗑️ Preis-Statistik zurückgesetzt');
+    this.showToast('Preis-Statistik zurückgesetzt');
   }
 
   showToast(message) {

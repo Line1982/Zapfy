@@ -32,6 +32,7 @@ Benutzereinstellungen (Hinweis: `apiKey` wird bei JSON-Backups aus Datenschutzgr
 - `apiKey`: Persönlicher Tankerkönig API-Key (String, nur lokal gespeichert)
 - `demoMode`: Simulationsmodus erzwingen (`true`/`false`)
 - `tankVolume`: Tankgröße in Litern (Standard: `50`)
+- `consumption`: Ø Kraftstoffverbrauch in L/100km für den Smart-Umweg-Rechner (Standard: `7.0`)
 - `defaultFuel`: Standard-Kraftstoffsorte (`"e10"`, `"e5"`, `"diesel"`)
 - `radiusKm`: Suchradius in km (`3`, `5`, `10`, `15`)
 - `fallbackRegion`: `"lat,lng"` Fallback-Koordinaten, falls GPS im Browser deaktiviert ist
