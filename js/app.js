@@ -21,8 +21,9 @@ class ZapfyApp {
     this.statsSubView = 'cycle'; // 'cycle' | 'history'
 
     this.fuelType = 'e10';
-    this.radiusKm = 5;
-    this.sortMode = 'price'; // 'price' | 'dist' | 'fav'
+    this.radiusKm = 15;
+    this.sortMode = 'smart'; // 'smart' | 'price' | 'dist'
+    this.showAllStations = false;
 
     this.config = {
       apiKey: '',
@@ -37,6 +38,8 @@ class ZapfyApp {
       lat: 52.5200,
       lng: 13.4050,
       accuracy: null,
+      headingDeg: null,
+      speedMps: null,
       isLiveGps: false,
       updatedAt: null
     };
@@ -64,14 +67,14 @@ class ZapfyApp {
   }
 
   async loadSettingsAndData() {
-    const [apiKey, demoMode, tankVolume, consumption, defaultFuel, fallbackRegion, radiusKm, favorites, snapshots, detailsMap] = await Promise.all([
+    const [apiKey, demoMode, tankVolume, consumption, defaultFuel, fallbackRegion, sortMode, favorites, snapshots, detailsMap] = await Promise.all([
       db.getSetting('apiKey', ''),
       db.getSetting('demoMode', false),
       db.getSetting('tankVolume', 50),
       db.getSetting('consumption', 7.0),
       db.getSetting('defaultFuel', 'e10'),
       db.getSetting('fallbackRegion', '52.5200,13.4050'),
-      db.getSetting('radiusKm', 5),
+      db.getSetting('sortMode', 'smart'),
       db.getFavorites(),
       db.getAllSnapshots(),
       db.getAllStationDetailsMap()
@@ -87,7 +90,8 @@ class ZapfyApp {
     };
 
     this.fuelType = this.config.defaultFuel;
-    this.radiusKm = Number(radiusKm) || 5;
+    this.radiusKm = 15;
+    this.sortMode = ['smart', 'price', 'dist'].includes(sortMode) ? sortMode : 'smart';
 
     const [fbLat, fbLng] = this.config.fallbackRegion.split(',').map(Number);
     if (!isNaN(fbLat) && !isNaN(fbLng)) {
@@ -113,9 +117,9 @@ class ZapfyApp {
       btn.classList.toggle('active', btn.getAttribute('data-fuel') === this.fuelType);
     });
 
-    // Radius Pills
-    document.querySelectorAll('.radius-pill[data-radius]').forEach((btn) => {
-      btn.classList.toggle('active', Number(btn.getAttribute('data-radius')) === this.radiusKm);
+    // Sort Pills (Smart / Preis / Nähe)
+    document.querySelectorAll('.sort-pill[data-sort]').forEach((btn) => {
+      btn.classList.toggle('active', btn.getAttribute('data-sort') === this.sortMode);
     });
 
     // Settings Form Fields
@@ -200,15 +204,16 @@ class ZapfyApp {
       });
     });
 
-    // Radius Selector Pills (3km / 5km / 10km / 15km)
-    document.querySelectorAll('.radius-pill[data-radius]').forEach((btn) => {
+    // Sort Selector Pills (Smart / Preis / Nähe)
+    document.querySelectorAll('.sort-pill[data-sort]').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        const rad = Number(btn.getAttribute('data-radius'));
-        if (!isNaN(rad) && rad > 0) {
-          this.radiusKm = rad;
-          await db.setSetting('radiusKm', rad);
+        const mode = btn.getAttribute('data-sort');
+        if (mode && ['smart', 'price', 'dist'].includes(mode)) {
+          this.sortMode = mode;
+          this.showAllStations = false;
+          await db.setSetting('sortMode', mode);
           this.syncControlsUI();
-          await this.fetchPricesForCurrentLocation();
+          this.renderAll();
         }
       });
     });
@@ -225,6 +230,12 @@ class ZapfyApp {
     const stationsList = document.getElementById('stationsList');
     if (stationsList) {
       stationsList.addEventListener('click', async (e) => {
+        const showMoreBtn = e.target.closest('#btnShowMoreStations');
+        if (showMoreBtn) {
+          this.showAllStations = true;
+          this.renderAll();
+          return;
+        }
         // Ignore clicks on Google Maps buttons so navigation opens immediately
         if (e.target.closest('a, button')) return;
         const cardEl = e.target.closest('.station-card[data-station-id]');
@@ -392,6 +403,7 @@ class ZapfyApp {
 
   async refreshGpsAndFetchPrices({ silentGpsFallback = false } = {}) {
     if (this.isFetching) return;
+    this.showAllStations = false;
     this.updateGpsToolbarStatus('loading', 'GPS wird geortet…');
 
     try {
@@ -400,6 +412,8 @@ class ZapfyApp {
         lat: coords.lat,
         lng: coords.lng,
         accuracy: coords.accuracy,
+        headingDeg: coords.headingDeg ?? null,
+        speedMps: coords.speedMps ?? null,
         isLiveGps: true,
         updatedAt: new Date()
       };
@@ -410,6 +424,8 @@ class ZapfyApp {
         lat: !isNaN(fbLat) ? fbLat : 52.5200,
         lng: !isNaN(fbLng) ? fbLng : 13.4050,
         accuracy: null,
+        headingDeg: null,
+        speedMps: null,
         isLiveGps: false,
         updatedAt: new Date()
       };
@@ -422,13 +438,22 @@ class ZapfyApp {
     await this.fetchPricesForCurrentLocation();
   }
 
+  getTravelContext() {
+    return {
+      lat: this.currentLocation.lat,
+      lng: this.currentLocation.lng,
+      headingDeg: this.currentLocation.headingDeg,
+      showAll: this.showAllStations
+    };
+  }
+
   async fetchPricesForCurrentLocation() {
     this.isFetching = true;
     try {
       const res = await FuelApiService.fetchStations({
         lat: this.currentLocation.lat,
         lng: this.currentLocation.lng,
-        radiusKm: this.radiusKm,
+        radiusKm: 15,
         apiKey: this.config.apiKey,
         demoMode: this.config.demoMode
       });
@@ -457,7 +482,8 @@ class ZapfyApp {
 
       const timeStr = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
       const fuelShort = FUEL_LABELS[this.fuelType] || 'E10';
-      this.updateGpsToolbarStatus('ready', `${fuelShort} · ${timeStr}`);
+      const routeHint = this.currentLocation.headingDeg !== null ? ' · Route' : '';
+      this.updateGpsToolbarStatus('ready', `${fuelShort}${routeHint} · ${timeStr}`);
       if (res.rateLimited && res.waitSec) {
         this.showToast(`Rate-Limit-Schutz aktiv (Cache genutzt, nächster Live-Abruf in ${res.waitSec}s)`);
       }
@@ -479,7 +505,8 @@ class ZapfyApp {
         this.favoritesSet,
         this.radiusKm,
         this.config.tankVolume,
-        this.config.consumption
+        this.config.consumption,
+        this.getTravelContext()
       );
       const topFirst = rankingNow.list[0];
       if (topFirst && !this.stationDetailsMap.has(topFirst.id)) {
@@ -496,7 +523,7 @@ class ZapfyApp {
       const simStations = FuelApiService.generateSimulatedStations(
         this.currentLocation.lat,
         this.currentLocation.lng,
-        this.radiusKm
+        15
       );
       this.stations = simStations;
       this.dataSource = 'demo';
@@ -655,13 +682,9 @@ class ZapfyApp {
       this.favoritesSet,
       this.radiusKm,
       this.config.tankVolume,
-      this.config.consumption
+      this.config.consumption,
+      this.getTravelContext()
     );
-
-    if (ranking.autoExpanded && ranking.effectiveRadiusKm !== this.radiusKm) {
-      this.radiusKm = ranking.effectiveRadiusKm;
-      this.syncControlsUI();
-    }
 
     const nearbyIds = new Set(this.stations.map((s) => s.id));
     const localSnapshots = nearbyIds.size > 0
@@ -707,8 +730,8 @@ class ZapfyApp {
     if (!ranking.list || ranking.list.length === 0) {
       container.innerHTML = `
         <div class="empty-state">
-          Keine Tankstellen im ${this.radiusKm} km Umkreis gefunden.<br>
-          Tippe oben auf einen größeren Radius (z.B. 10km oder 15km).
+          Aktuell keine Tankstellen im erweiterten Suchkorridor gefunden.<br>
+          Tippe oben links auf GPS aktualisieren.
         </div>
       `;
       return;
@@ -717,22 +740,67 @@ class ZapfyApp {
     const cardsHtml = ranking.list.map((st) => {
       const priceFmt = PriceEngine.formatPriceParts(st.activePrice);
       const gmaps = FuelApiService.getGoogleMapsLinks(st);
-      const isWinner = Boolean(st.isCheapest && st.isOpen);
-      const distStr = `${st.dist.toFixed(1).replace('.', ',')} km`;
+      const isWinner =
+        this.sortMode === 'smart'
+          ? Boolean(st.isBestSmart && st.isOpen)
+          : this.sortMode === 'price'
+            ? Boolean(st.isCheapest && st.isOpen)
+            : Boolean(st.rank === 1 && st.isOpen && (st.isBestSmart || st.isCheapest));
+
+      const distRawStr = `${st.dist.toFixed(1).replace('.', ',')} km`;
+      let distHtml = distRawStr;
+      if (typeof st.relBearingDeg === 'number') {
+        const aheadClass = st.routeStatus === 'ahead' ? 'is-ahead' : st.routeStatus === 'behind' ? 'is-behind' : '';
+        distHtml = `<span class="meta-dist-wrap"><svg class="route-dir-svg ${aheadClass}" style="transform:rotate(${st.relBearingDeg}deg)" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg><span>${distRawStr}</span></span>`;
+      }
+
       const streetStr = [st.street, st.houseNumber].filter(Boolean).join(' ') || st.place || '';
       const openStatusHtml = this.formatOpenStatusHtml(st);
 
-      // Clean, quiet single meta line: ● Offen (24h) · 1,1 km · Hauptstraße 42 · (+Extra cost for 50L)
       let extraInfoHtml = '';
-      if (st.diffToMin > 0.001) {
-        const extraTankCost = (st.diffToMin * this.config.tankVolume).toFixed(2).replace('.', ',');
-        extraInfoHtml = ` · <span class="meta-extra-cost">+${extraTankCost} € (${this.config.tankVolume}L)</span>`;
+      if (st.routeStatus === 'ahead') {
+        extraInfoHtml += ` · <span class="meta-route-ahead">Auf Route</span>`;
       }
 
-      const metaParts = [openStatusHtml, distStr, this.escapeHtml(streetStr)].filter(Boolean).join(' · ');
+      if (st.isWorthwhileDetour) {
+        const netSavStr = st.netSavingVsNearest.toFixed(2).replace('.', ',');
+        extraInfoHtml += ` · <span class="meta-worthwhile">Lohnt sich: −${netSavStr} € netto</span>`;
+      } else if (st.isNearestOpen && st.diffToBestNet <= 0.15) {
+        extraInfoHtml += ` · <span class="meta-nearest-tag">Nächste · Optimal</span>`;
+      } else if (st.isNearestOpen) {
+        extraInfoHtml += ` · <span class="meta-nearest-tag">Nächste Station</span>`;
+      } else if (this.sortMode === 'smart' && st.diffToBestNet > 0.15) {
+        const extraNetCost = st.diffToBestNet.toFixed(2).replace('.', ',');
+        extraInfoHtml += ` · <span class="meta-extra-cost">+${extraNetCost} € (${this.config.tankVolume}L)</span>`;
+      } else if (st.diffToMin > 0.001) {
+        const extraTankCost = (st.diffToMin * this.config.tankVolume).toFixed(2).replace('.', ',');
+        extraInfoHtml += ` · <span class="meta-extra-cost">+${extraTankCost} € (${this.config.tankVolume}L)</span>`;
+      }
+
+      const metaParts = [openStatusHtml, distHtml, this.escapeHtml(streetStr)].filter(Boolean).join(' · ');
+
+      // Optional top banner if #1 station is a worthwhile detour further away than the nearest station
+      let topDetourBannerHtml = '';
+      if (st.rank === 1 && st.isWorthwhileDetour && st.extraDistOneWay >= 0.5) {
+        const netStr = st.netSavingVsNearest.toFixed(2).replace('.', ',');
+        const extraDistStr = st.extraDistOneWay.toFixed(1).replace('.', ',');
+        topDetourBannerHtml = `
+          <div class="detour-tip-banner">
+            <span style="display:inline-flex;align-items:center;gap:4px;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="13 17 18 12 13 7"></polyline>
+                <polyline points="6 17 11 12 6 7"></polyline>
+              </svg>
+              <span>+${extraDistStr} km lohnt sich nach Sprit-Abzug</span>
+            </span>
+            <span class="detour-net-pill">−${netStr} € (${this.config.tankVolume}L)</span>
+          </div>
+        `;
+      }
 
       return `
         <article class="station-card ${isWinner ? 'is-winner' : ''} ${!st.isOpen ? 'is-closed' : ''}" data-station-id="${this.escapeHtml(st.id)}" title="Antippen, um genaue Schließzeit zu prüfen">
+          ${topDetourBannerHtml}
           <div class="station-top-row">
             <div class="station-info">
               <div class="station-brand">${this.escapeHtml(st.brand || st.name)}</div>
@@ -768,64 +836,15 @@ class ZapfyApp {
       `;
     });
 
-    // Insert Smart Detour Recommendation Card at the very top (rank 0) if a cheaper station is just 1-4 km further
-    if (ranking.smartDetour && ranking.smartDetour.station) {
-      const dt = ranking.smartDetour;
-      const st = dt.station;
-      const priceFmt = PriceEngine.formatPriceParts(st.activePrice);
-      const gmaps = FuelApiService.getGoogleMapsLinks(st);
-      const netStr = dt.netSaving.toFixed(2).replace('.', ',');
-      const extraDistStr = dt.extraDistKm.toFixed(1).replace('.', ',');
-      const openStatusHtml = this.formatOpenStatusHtml(st);
-
-      const detourHtml = `
-        <article class="station-card is-detour-tip" data-station-id="${this.escapeHtml(st.id)}" title="Antippen, um genaue Schließzeit zu prüfen">
-          <div class="detour-tip-banner">
-            <span style="display:inline-flex;align-items:center;gap:4px;">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="13 17 18 12 13 7"></polyline>
-                <polyline points="6 17 11 12 6 7"></polyline>
-              </svg>
-              <span>+${extraDistStr} km weiter lohnt sich</span>
-            </span>
-            <span class="detour-net-pill">−${netStr} € (${this.config.tankVolume}L)</span>
-          </div>
-
-          <div class="station-top-row">
-            <div class="station-info">
-              <div class="station-brand">${this.escapeHtml(st.brand || st.name)}</div>
-              <div class="station-meta-line">${openStatusHtml} · ${st.dist.toFixed(1).replace('.', ',')} km · Nach Sprit-Abzug ${netStr} € günstiger</div>
-            </div>
-
-            <div class="station-price-box">
-              <div class="price-digits">
-                <span>${priceFmt.main}</span>
-                <span class="price-tenths">${priceFmt.tenths}</span>
-                <span class="price-unit">€</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="station-actions-row">
-            <a href="${gmaps.navigateUrl}" target="_blank" rel="noopener noreferrer" class="btn-gmaps-route" title="Direkt zum Smart-Umweg navigieren">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <polygon points="3 11 22 2 13 21 11 13 3 11"></polygon>
-              </svg>
-              <span>Route starten</span>
-            </a>
-
-            <a href="${gmaps.mapViewUrl}" target="_blank" rel="noopener noreferrer" class="btn-gmaps-pin" title="Pin auf Google Maps Karte zeigen">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
-                <circle cx="12" cy="10" r="3"></circle>
-              </svg>
-              <span>Pin</span>
-            </a>
-          </div>
-        </article>
-      `;
-
-      cardsHtml.unshift(detourHtml);
+    if (ranking.hiddenCount > 0) {
+      cardsHtml.push(`
+        <button type="button" class="btn-show-more-stations" id="btnShowMoreStations">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+          <span>+${ranking.hiddenCount} weitere Tankstellen im Korridor zeigen</span>
+        </button>
+      `);
     }
 
     container.innerHTML = cardsHtml.join('');

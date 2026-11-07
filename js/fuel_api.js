@@ -11,11 +11,13 @@ const TANKERKOENIG_DETAIL_URL = 'https://creativecommons.tankerkoenig.de/json/de
 // Persistent Token-Bucket & Spatial-Temporal Cache Constants (Protects Tankerkönig API across app restarts)
 const STORAGE_KEY_BUCKET = 'zapfy_tk_token_bucket_v1';
 const STORAGE_KEY_API_CACHE = 'zapfy_tk_last_response_v1';
+const STORAGE_KEY_GPS_TRAIL = 'zapfy_gps_breadcrumbs_v1';
 
 const BUCKET_CAPACITY = 4;               // Max burst tokens
 const BUCKET_REFILL_MS = 5 * 60 * 1000;  // 1 new token every 5 minutes (recommended Tankerkönig interval)
 const CACHE_FRESH_TTL_MS = 4 * 60 * 1000; // 4 minutes: serve cached response on repeated app open/close if within 400m
 const COOLDOWN_503_MS = 10 * 60 * 1000;  // 10 minutes strict pause if server ever returns HTTP 503 Rate Limit Exceeded
+const GPS_TRAIL_MAX_AGE_MS = 20 * 60 * 1000; // 20 minutes macro-route trail window
 
 export class FuelApiService {
   /**
@@ -29,6 +31,111 @@ export class FuelApiService {
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
       Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  /**
+   * Calculates compass bearing in degrees [0..360) from coordinate 1 to coordinate 2.
+   */
+  static calculateBearingDeg(lat1, lng1, lat2, lng2) {
+    const phi1 = (lat1 * Math.PI) / 180;
+    const phi2 = (lat2 * Math.PI) / 180;
+    const dLambda = ((lng2 - lng1) * Math.PI) / 180;
+    const y = Math.sin(dLambda) * Math.cos(phi2);
+    const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLambda);
+    const theta = (Math.atan2(y, x) * 180) / Math.PI;
+    return (theta + 360) % 360;
+  }
+
+  /**
+   * Computes a curve-resistant macro travel heading (0..360 deg) using a persistent GPS
+   * breadcrumb ring buffer. Short curves, roundabouts, or turns (< 350m) are filtered out
+   * by evaluating long secant chords (350m to 6km) combined via circular vector smoothing.
+   */
+  static updateAndComputeMacroHeading({ lat, lng, rawHeading = null, speedMps = null, accuracy = 50, timestamp = Date.now() }) {
+    if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) {
+      return null;
+    }
+
+    let trail = [];
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_GPS_TRAIL);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          trail = parsed.filter(
+            (pt) =>
+              pt &&
+              typeof pt.lat === 'number' &&
+              typeof pt.lng === 'number' &&
+              typeof pt.ts === 'number' &&
+              timestamp - pt.ts <= GPS_TRAIL_MAX_AGE_MS &&
+              this.calculateDistanceKm(pt.lat, pt.lng, lat, lng) <= 12.0
+          );
+        }
+      }
+    } catch { /* ignore */ }
+
+    // Only append a new breadcrumb if moved >= 120m from the last recorded point (suppresses stationary GPS drift)
+    const lastPt = trail.length > 0 ? trail[trail.length - 1] : null;
+    const distFromLastKm = lastPt ? this.calculateDistanceKm(lastPt.lat, lastPt.lng, lat, lng) : 999;
+
+    if (!lastPt || distFromLastKm >= 0.12) {
+      trail.push({ lat, lng, ts: timestamp });
+      if (trail.length > 10) {
+        trail = trail.slice(trail.length - 10);
+      }
+      try {
+        localStorage.setItem(STORAGE_KEY_GPS_TRAIL, JSON.stringify(trail));
+      } catch { /* ignore */ }
+    }
+
+    // Circular vector accumulation: sum(w * cos(theta)), sum(w * sin(theta))
+    let sumSin = 0;
+    let sumCos = 0;
+    let totalWeight = 0;
+
+    // 1. Primary source (80%+ weight): Macro secant chords >= 350m (0.35 km) to 6.0 km
+    //    This averages out any S-curve, roundabout, or intersection turn.
+    for (const pt of trail) {
+      const chordKm = this.calculateDistanceKm(pt.lat, pt.lng, lat, lng);
+      if (chordKm >= 0.35 && chordKm <= 6.0) {
+        const chordBearing = this.calculateBearingDeg(pt.lat, pt.lng, lat, lng);
+        const rad = (chordBearing * Math.PI) / 180;
+        // Weight peaks around 0.8 - 2.5 km macro baseline
+        const w = Math.min(2.0, chordKm);
+        sumSin += w * Math.sin(rad);
+        sumCos += w * Math.cos(rad);
+        totalWeight += w;
+      }
+    }
+
+    // 2. Secondary damped input (max 20% weight): Hardware GPS heading, ONLY when driving steadily (>= 25 km/h = 7 m/s)
+    const validRawHeading = typeof rawHeading === 'number' && !isNaN(rawHeading) && rawHeading >= 0 && rawHeading <= 360;
+    const steadySpeed = typeof speedMps === 'number' && !isNaN(speedMps) && speedMps >= 7.0;
+    const goodAccuracy = !accuracy || accuracy <= 75;
+
+    if (validRawHeading && steadySpeed && goodAccuracy) {
+      const rad = (rawHeading * Math.PI) / 180;
+      if (totalWeight > 0) {
+        // Blend at most 20% instantaneous heading into the 80% macro secant vector
+        const instWeight = totalWeight * 0.25;
+        sumSin += instWeight * Math.sin(rad);
+        sumCos += instWeight * Math.cos(rad);
+        totalWeight += instWeight;
+      } else if (speedMps >= 11.0) {
+        // Cold start on highway/country road (>= 40 km/h) before 350m trail is built
+        sumSin += Math.sin(rad);
+        sumCos += Math.cos(rad);
+        totalWeight += 1.0;
+      }
+    }
+
+    if (totalWeight <= 0.01) {
+      return null;
+    }
+
+    const meanRad = Math.atan2(sumSin, sumCos);
+    return Math.round((((meanRad * 180) / Math.PI) + 360) % 360);
   }
 
   /**
@@ -156,11 +263,28 @@ export class FuelApiService {
 
       navigator.geolocation.getCurrentPosition(
         (pos) => {
+          const lat = Number(pos.coords.latitude.toFixed(6));
+          const lng = Number(pos.coords.longitude.toFixed(6));
+          const accuracy = Math.round(pos.coords.accuracy || 0);
+          const timestamp = pos.timestamp || Date.now();
+          const rawHeading = typeof pos.coords.heading === 'number' && !isNaN(pos.coords.heading) ? pos.coords.heading : null;
+          const speedMps = typeof pos.coords.speed === 'number' && !isNaN(pos.coords.speed) ? pos.coords.speed : null;
+          const headingDeg = this.updateAndComputeMacroHeading({
+            lat,
+            lng,
+            rawHeading,
+            speedMps,
+            accuracy,
+            timestamp
+          });
+
           resolve({
-            lat: Number(pos.coords.latitude.toFixed(6)),
-            lng: Number(pos.coords.longitude.toFixed(6)),
-            accuracy: Math.round(pos.coords.accuracy || 0),
-            timestamp: pos.timestamp || Date.now()
+            lat,
+            lng,
+            accuracy,
+            headingDeg,
+            speedMps,
+            timestamp
           });
         },
         (err) => {
@@ -182,15 +306,14 @@ export class FuelApiService {
   /**
    * Fetches nearby stations from Tankerkönig API or falls back to realistic simulation mode
    * if demoMode is active or no API key is configured yet.
-   * Always fetches a lookahead buffer (+4 km beyond selected radiusKm, up to 25 km) so the
-   * app can detect "Smart Detour" bargains just 1-3 km outside the active radius and
-   * automatically expand the radius if fewer than 3 stations are open inside radiusKm.
+   * Always fetches a 15-25 km corridor in a single API call so PriceEngine can dynamically
+   * determine the worthwhile radius without empty-radius states or extra API calls.
    */
-  static async fetchStations({ lat, lng, radiusKm = 5, apiKey = '', demoMode = false }) {
+  static async fetchStations({ lat, lng, radiusKm = 15, apiKey = '', demoMode = false }) {
     const cleanKey = (apiKey || '').trim();
     const useSimulation = demoMode || !cleanKey;
-    const requestedRad = Math.min(25, Math.max(1, Number(radiusKm) || 5));
-    const lookaheadRad = Math.min(25, Math.max(requestedRad + 4, 10));
+    const requestedRad = Math.min(25, Math.max(1, Number(radiusKm) || 15));
+    const lookaheadRad = Math.min(25, Math.max(requestedRad, 15));
 
     if (useSimulation) {
       const stations = this.generateSimulatedStations(lat, lng, lookaheadRad);

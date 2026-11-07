@@ -364,7 +364,21 @@ html, body {
   padding: 0 8px;
   border-radius: 9px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   transition: all 0.12s ease;
+}
+
+.sort-pill-svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.radius-pill.active .sort-pill-svg {
+  opacity: 1;
 }
 
 .radius-pill.active {
@@ -671,6 +685,70 @@ html, body {
 .meta-extra-cost {
   color: var(--rose);
   font-weight: 800;
+}
+
+.meta-worthwhile {
+  color: var(--emerald-dark);
+  font-weight: 800;
+}
+
+.meta-nearest-tag {
+  color: var(--primary);
+  font-weight: 800;
+}
+
+.meta-route-ahead {
+  color: var(--emerald-dark);
+  background: rgba(16, 185, 129, 0.12);
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.meta-dist-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.route-dir-svg {
+  display: inline-block;
+  vertical-align: -1px;
+  color: var(--text-secondary);
+  transition: transform 0.25s ease;
+}
+
+.route-dir-svg.is-ahead {
+  color: var(--emerald-dark);
+}
+
+.route-dir-svg.is-behind {
+  opacity: 0.55;
+}
+
+.btn-show-more-stations {
+  width: 100%;
+  border: 1px dashed rgba(15, 23, 42, 0.16);
+  background: rgba(255, 255, 255, 0.65);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-shrink: 0;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.btn-show-more-stations:active {
+  transform: scale(0.99);
+  background: #ffffff;
 }
 
 .meta-winner-tag {

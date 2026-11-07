@@ -19,7 +19,7 @@
   <link rel="icon" type="image/png" href="assets/icon-192.png?v=1.8.0">
   <link rel="icon" type="image/x-icon" href="assets/favicon.ico?v=1.8.0">
 
-  <link rel="stylesheet" href="styles.css?v=1.9.0">
+  <link rel="stylesheet" href="styles.css?v=1.10.0">
 </head>
 <body>
 
@@ -37,7 +37,7 @@
           <!-- Central Radar Control & Station List Card (Full Height, Zero Visual Noise) -->
           <div class="radar-card">
 
-            <!-- Single Compact Header Row: GPS Refresh + Active Fuel Label + Radius Pills -->
+            <!-- Single Compact Header Row: GPS Refresh + Active Fuel Label + Smart Sort Pills -->
             <div class="gps-toolbar">
               <button type="button" class="gps-locate-btn" id="btnRefreshGps" title="GPS-Standort &amp; Preise jetzt aktualisieren">
                 <svg class="gps-icon-svg" id="gpsStatusSvg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -50,11 +50,26 @@
                 <span class="gps-label" id="gpsStatusText">GPS aktualisieren</span>
               </button>
 
-              <div class="radius-pills" role="group" aria-label="Suchradius">
-                <button type="button" class="radius-pill" data-radius="3">3km</button>
-                <button type="button" class="radius-pill active" data-radius="5">5km</button>
-                <button type="button" class="radius-pill" data-radius="10">10km</button>
-                <button type="button" class="radius-pill" data-radius="15">15km</button>
+              <div class="radius-pills sort-pills" role="group" aria-label="Sortierung">
+                <button type="button" class="radius-pill sort-pill active" data-sort="smart" title="Smart-Ranking: Bester Netto-Deal aus Preis, Entfernung &amp; Fahrtrichtung">
+                  <svg class="sort-pill-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                  </svg>
+                  <span>Smart</span>
+                </button>
+                <button type="button" class="radius-pill sort-pill" data-sort="price" title="Nach günstigstem Literpreis im sinnvollen Korridor sortieren">
+                  <svg class="sort-pill-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
+                    <line x1="7" y1="7" x2="7.01" y2="7"></line>
+                  </svg>
+                  <span>Preis</span>
+                </button>
+                <button type="button" class="radius-pill sort-pill" data-sort="dist" title="Nach geringster Entfernung (bevorzugt in Fahrtrichtung) sortieren">
+                  <svg class="sort-pill-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="3 11 22 2 13 21 11 13 3 11"></polygon>
+                  </svg>
+                  <span>Nähe</span>
+                </button>
               </div>
             </div>
 
@@ -384,6 +399,6 @@
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
   <!-- App Entry Script -->
-  <script type="module" src="js/app.js?v=1.9.0"></script>
+  <script type="module" src="js/app.js?v=1.10.0"></script>
 </body>
 </html>

@@ -27,15 +27,44 @@ export class PriceEngine {
   }
 
   /**
-   * Filters and sorts stations by selected fuel type ('e10', 'e5', 'diesel'), active radiusKm,
-   * and sort mode ('price', 'dist', 'fav').
-   * Also evaluates stations in the lookahead buffer (1-4 km outside radiusKm) to detect a
-   * worthwhile "Smart Detour" bargain (considering gross tank savings minus extra driving fuel cost).
+   * Calculates compass bearing in degrees [0..360) from coordinate 1 to coordinate 2.
    */
-  static rankStations(stations, fuelType = 'e10', sortMode = 'price', favoritesSet = new Set(), radiusKm = 5, tankLiters = 50, consumptionL100km = 7.0) {
-    if (!Array.isArray(stations)) {
+  static calculateBearingDeg(lat1, lng1, lat2, lng2) {
+    const phi1 = (lat1 * Math.PI) / 180;
+    const phi2 = (lat2 * Math.PI) / 180;
+    const dLambda = ((lng2 - lng1) * Math.PI) / 180;
+    const y = Math.sin(dLambda) * Math.cos(phi2);
+    const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLambda);
+    const theta = (Math.atan2(y, x) * 180) / Math.PI;
+    return (theta + 360) % 360;
+  }
+
+  /**
+   * Dynamically filters and ranks stations by selected fuel type ('e10', 'e5', 'diesel')
+   * and sort mode ('smart', 'price', 'dist', 'fav') without requiring manual radius steps.
+   *
+   * Core Mechanics:
+   * 1. Anchor (`nearestOpenStation`): Guarantees non-empty results whether in the city (0.8 km) or countryside (9 km).
+   * 2. Curve-Resistant Heading Corridor: Uses a smooth cosine detour factor `0.85 - 0.55 * cos(deltaAngle)`
+   *    when a macro travel heading is present, preferring stations ahead along the route without abrupt angle cutoffs.
+   * 3. Economic Worthwhile Filter & Pareto Pruning: Eliminates stations that are further away AND more expensive,
+   *    and caps the default view to the top 8 most relevant stations (`showAll` unlocks all).
+   */
+  static rankStations(
+    stations,
+    fuelType = 'e10',
+    sortMode = 'smart',
+    favoritesSet = new Set(),
+    radiusKm = 15,
+    tankLiters = 50,
+    consumptionL100km = 7.0,
+    travelContext = null
+  ) {
+    if (!Array.isArray(stations) || stations.length === 0) {
       return {
         list: [],
+        hiddenCount: 0,
+        totalRelevantCount: 0,
         openCount: 0,
         totalCount: 0,
         minPrice: null,
@@ -43,151 +72,279 @@ export class PriceEngine {
         avgPrice: null,
         spreadPerLiter: 0,
         smartDetour: null,
-        effectiveRadiusKm: radiusKm,
-        autoExpanded: false
+        effectiveRadiusKm: radiusKm || 5,
+        autoExpanded: false,
+        hasActiveHeading: false,
+        headingDeg: null
       };
     }
 
-    const activeRad = Number(radiusKm) || 5;
-    let effectiveRadiusKm = activeRad;
-    let autoExpanded = false;
+    const effectiveTank = Math.max(10, Math.min(150, Number(tankLiters) || 50));
+    const effectiveConsumption = Math.max(2.0, Math.min(25.0, Number(consumptionL100km) || 7.0));
 
-    // Count open stations inside requested radius; auto-expand if fewer than 3 are open
-    const countOpenWithin = (rad) =>
-      stations.filter((s) => s.isOpen && typeof s[fuelType] === 'number' && s[fuelType] > 0 && s.dist <= rad).length;
+    const hasActiveHeading = Boolean(
+      travelContext &&
+      typeof travelContext.headingDeg === 'number' &&
+      !isNaN(travelContext.headingDeg) &&
+      typeof travelContext.lat === 'number' &&
+      typeof travelContext.lng === 'number'
+    );
+    const headingDeg = hasActiveHeading ? travelContext.headingDeg : null;
+    const showAll = Boolean(travelContext && travelContext.showAll);
 
-    const radiusSteps = [3, 5, 10, 15, 25];
-    if (countOpenWithin(effectiveRadiusKm) < 3) {
-      for (const stepRad of radiusSteps) {
-        if (stepRad > effectiveRadiusKm && countOpenWithin(stepRad) > countOpenWithin(effectiveRadiusKm)) {
-          effectiveRadiusKm = stepRad;
-          autoExpanded = true;
-          if (countOpenWithin(effectiveRadiusKm) >= 3) break;
+    const pricedAll = [];
+    const unpricedAll = [];
+
+    for (const st of stations) {
+      const price = st[fuelType];
+      const isFav = favoritesSet.has(st.id);
+      const activePrice = typeof price === 'number' && price > 0 ? price : null;
+
+      let bearingDeg = null;
+      let relBearingDeg = null;
+      let routeFactor = 1.0;
+      let routeStatus = null; // 'ahead' | 'side' | 'behind' | null
+
+      if (hasActiveHeading && typeof st.lat === 'number' && typeof st.lng === 'number' && st.dist >= 0.25) {
+        bearingDeg = this.calculateBearingDeg(travelContext.lat, travelContext.lng, st.lat, st.lng);
+        relBearingDeg = ((bearingDeg - headingDeg + 540) % 360) - 180; // [-180..+180]
+        const absAngle = Math.abs(relBearingDeg);
+        // Smooth cosine curve: 0 deg (ahead) -> 0.30x detour, 60 deg -> 0.58x, 90 deg -> 0.85x, 180 deg (behind) -> 1.40x
+        routeFactor = Number((0.85 - 0.55 * Math.cos((absAngle * Math.PI) / 180)).toFixed(3));
+        if (absAngle <= 50) {
+          routeStatus = 'ahead';
+        } else if (absAngle <= 115) {
+          routeStatus = 'side';
+        } else {
+          routeStatus = 'behind';
+        }
+      }
+
+      const effectiveRoundTripKm = Number((2 * st.dist * routeFactor).toFixed(2));
+      const enriched = {
+        ...st,
+        activePrice,
+        isFavorite: isFav,
+        bearingDeg,
+        relBearingDeg: relBearingDeg !== null ? Math.round(relBearingDeg) : null,
+        routeFactor,
+        routeStatus,
+        effectiveRoundTripKm
+      };
+
+      if (activePrice !== null) {
+        pricedAll.push(enriched);
+      } else {
+        unpricedAll.push(enriched);
+      }
+    }
+
+    // 1. Identify Anchor Station (Nearest Open Station by effective distance, fallback to nearest priced)
+    let nearestOpenStation = null;
+    for (const st of pricedAll) {
+      if (st.isOpen) {
+        if (
+          !nearestOpenStation ||
+          st.effectiveRoundTripKm < nearestOpenStation.effectiveRoundTripKm ||
+          (st.effectiveRoundTripKm === nearestOpenStation.effectiveRoundTripKm && st.activePrice < nearestOpenStation.activePrice)
+        ) {
+          nearestOpenStation = st;
+        }
+      }
+    }
+    if (!nearestOpenStation && pricedAll.length > 0) {
+      nearestOpenStation = [...pricedAll].sort((a, b) => a.dist - b.dist)[0];
+    }
+
+    // 2. Determine dynamic base neighborhood radius around the nearest open station
+    //    Ensures at least 4 open stations are included as local baseline (whether 1.5 km in city or 12 km rural)
+    const dMin = nearestOpenStation ? nearestOpenStation.dist : 3.0;
+    let baseRadiusKm = Math.max(3.5, Number((dMin + 2.5).toFixed(1)));
+    const countOpenWithin = (rad) => pricedAll.filter((s) => s.isOpen && s.dist <= rad).length;
+    for (const stepRad of [5, 7.5, 10, 15, 25]) {
+      if (countOpenWithin(baseRadiusKm) >= 4) break;
+      if (stepRad > baseRadiusKm && countOpenWithin(stepRad) > countOpenWithin(baseRadiusKm)) {
+        baseRadiusKm = stepRad;
+      }
+    }
+
+    // 3. Compute total tank + detour fuel economics for each station relative to Anchor
+    const anchorTripFuelLiters = nearestOpenStation
+      ? (nearestOpenStation.effectiveRoundTripKm * effectiveConsumption) / 100
+      : 0;
+    const anchorTotalCost = nearestOpenStation
+      ? (effectiveTank + anchorTripFuelLiters) * nearestOpenStation.activePrice
+      : null;
+
+    for (const st of pricedAll) {
+      const tripFuelLiters = (st.effectiveRoundTripKm * effectiveConsumption) / 100;
+      const detourFuelCost = Number((tripFuelLiters * st.activePrice).toFixed(2));
+      const effectiveTotalCost = Number(((effectiveTank + tripFuelLiters) * st.activePrice).toFixed(2));
+      const extraDistOneWay = nearestOpenStation
+        ? Math.max(0, Number(((st.effectiveRoundTripKm - nearestOpenStation.effectiveRoundTripKm) / 2).toFixed(1)))
+        : 0;
+      const netSavingVsNearest =
+        anchorTotalCost !== null ? Number((anchorTotalCost - effectiveTotalCost).toFixed(2)) : 0;
+
+      st.detourFuelCost = detourFuelCost;
+      st.effectiveTotalCost = effectiveTotalCost;
+      st.extraDistOneWay = extraDistOneWay;
+      st.netSavingVsNearest = netSavingVsNearest;
+      st.isNearestOpen = Boolean(nearestOpenStation && st.id === nearestOpenStation.id);
+    }
+
+    // 4. Filter: Dynamic Worthwhile Corridor + Pareto Dominance Pruning
+    //    A station is Pareto-dominated if another open station is strictly closer (both raw dist and effective route dist)
+    //    AND cheaper or equal in price.
+    const closestThreeIds = new Set(
+      [...pricedAll]
+        .sort((a, b) => a.dist - b.dist)
+        .slice(0, 3)
+        .map((s) => s.id)
+    );
+
+    let curatedPriced = pricedAll.filter((st) => {
+      if (st.isFavorite || st.isNearestOpen) return true;
+      if (sortMode === 'dist' && closestThreeIds.has(st.id)) return true;
+
+      // Pareto check against other open stations
+      if (st.isOpen) {
+        const isDominated = pricedAll.some(
+          (other) =>
+            other.id !== st.id &&
+            other.isOpen &&
+            other.dist <= st.dist - 0.25 &&
+            other.effectiveRoundTripKm <= st.effectiveRoundTripKm &&
+            other.activePrice <= st.activePrice
+        );
+        // Outside immediate 1.8 km vicinity, drop strictly dominated stations
+        if (isDominated && st.dist > dMin + 1.8) {
+          return false;
+        }
+      } else if (st.dist > baseRadiusKm) {
+        // Closed stations outside base neighborhood are irrelevant right now
+        return false;
+      }
+
+      // Within base neighborhood radius: keep
+      if (st.dist <= baseRadiusKm) {
+        return true;
+      }
+
+      // Outside base neighborhood radius: only include if worthwhile net savings (>= 0.25 €)
+      // or directly ahead on route with a lower price
+      if (st.isOpen && st.netSavingVsNearest >= 0.25) {
+        return true;
+      }
+      if (st.isOpen && st.routeStatus === 'ahead' && nearestOpenStation && st.activePrice < nearestOpenStation.activePrice) {
+        return true;
+      }
+
+      return false;
+    });
+
+    // Safety fallback: ensure at least 4 stations if available in dataset
+    if (curatedPriced.length < Math.min(4, pricedAll.length)) {
+      const keptIds = new Set(curatedPriced.map((s) => s.id));
+      const byDist = [...pricedAll].sort((a, b) => a.dist - b.dist);
+      for (const cand of byDist) {
+        if (!keptIds.has(cand.id)) {
+          curatedPriced.push(cand);
+          keptIds.add(cand.id);
+          if (curatedPriced.length >= 4) break;
         }
       }
     }
 
-    const insideStations = stations.filter((s) => s.dist <= effectiveRadiusKm);
-    const outsideBufferStations = stations.filter((s) => s.dist > effectiveRadiusKm && s.dist <= effectiveRadiusKm + 4.5);
-
-    const pricedStations = [];
-    const unpricedStations = [];
-
-    for (const st of insideStations) {
-      const price = st[fuelType];
-      const isFav = favoritesSet.has(st.id);
-      const enriched = { ...st, activePrice: typeof price === 'number' && price > 0 ? price : null, isFavorite: isFav };
-
-      if (enriched.activePrice !== null) {
-        pricedStations.push(enriched);
-      } else {
-        unpricedStations.push(enriched);
-      }
-    }
-
-    // Determine min, max, avg across all stations with a price (open or closed)
+    // 5. Compute stats (min, max, avg, best net) across the relevant corridor
     let minPrice = null;
     let maxPrice = null;
     let sumPrice = 0;
-    let bestInsideStation = null;
-    let bestInsideOpenStation = null;
+    let minEffectiveTotalCost = null;
 
-    for (const st of pricedStations) {
-      if (minPrice === null || st.activePrice < minPrice || (st.activePrice === minPrice && st.dist < (bestInsideStation?.dist ?? 999))) {
-        minPrice = st.activePrice;
-        bestInsideStation = st;
-      }
-      if (st.isOpen) {
-        if (!bestInsideOpenStation || st.activePrice < bestInsideOpenStation.activePrice || (st.activePrice === bestInsideOpenStation.activePrice && st.dist < bestInsideOpenStation.dist)) {
-          bestInsideOpenStation = st;
-        }
-      }
+    for (const st of curatedPriced) {
+      if (minPrice === null || st.activePrice < minPrice) minPrice = st.activePrice;
       if (maxPrice === null || st.activePrice > maxPrice) maxPrice = st.activePrice;
+      if (st.isOpen && (minEffectiveTotalCost === null || st.effectiveTotalCost < minEffectiveTotalCost)) {
+        minEffectiveTotalCost = st.effectiveTotalCost;
+      }
       sumPrice += st.activePrice;
     }
 
-    const avgPrice = pricedStations.length > 0 ? Number((sumPrice / pricedStations.length).toFixed(3)) : null;
+    const avgPrice = curatedPriced.length > 0 ? Number((sumPrice / curatedPriced.length).toFixed(3)) : null;
 
-    // Order strictly: Cheapest to most expensive (ascending price), open or closed
-    pricedStations.sort((a, b) => {
-      if (sortMode === 'fav') {
-        if (a.isFavorite !== b.isFavorite) return a.isFavorite ? -1 : 1;
+    // 6. Sort according to active sortMode ('smart' | 'price' | 'dist' | 'fav')
+    curatedPriced.sort((a, b) => {
+      if (sortMode === 'fav' && a.isFavorite !== b.isFavorite) {
+        return a.isFavorite ? -1 : 1;
       }
+
       if (sortMode === 'dist') {
-        if (a.dist !== b.dist) return a.dist - b.dist;
+        if (a.effectiveRoundTripKm !== b.effectiveRoundTripKm) {
+          return a.effectiveRoundTripKm - b.effectiveRoundTripKm;
+        }
         return a.activePrice - b.activePrice;
       }
-      // Standard: Cheapest first, tie-breaker: closer distance
-      if (a.activePrice !== b.activePrice) return a.activePrice - b.activePrice;
+
+      if (sortMode === 'price') {
+        if (a.activePrice !== b.activePrice) return a.activePrice - b.activePrice;
+        return a.effectiveRoundTripKm - b.effectiveRoundTripKm;
+      }
+
+      // Default 'smart': Open stations first, then lowest effective total cost (tank + detour fuel)
+      if (a.isOpen !== b.isOpen) return a.isOpen ? -1 : 1;
+      if (a.effectiveTotalCost !== b.effectiveTotalCost) {
+        return a.effectiveTotalCost - b.effectiveTotalCost;
+      }
       return a.dist - b.dist;
     });
 
-    unpricedStations.sort((a, b) => a.dist - b.dist);
-
-    const rankedPriced = pricedStations.map((st, idx) => {
+    const rankedAll = curatedPriced.map((st, idx) => {
       const diffToMin = minPrice !== null ? Number((st.activePrice - minPrice).toFixed(3)) : 0;
       const isCheapest = minPrice !== null && Math.abs(st.activePrice - minPrice) < 0.0005;
+      const isBestSmart =
+        st.isOpen && minEffectiveTotalCost !== null && Math.abs(st.effectiveTotalCost - minEffectiveTotalCost) <= 0.05;
+      const diffToBestNet =
+        minEffectiveTotalCost !== null ? Number((st.effectiveTotalCost - minEffectiveTotalCost).toFixed(2)) : 0;
+      const isWorthwhileDetour = Boolean(
+        st.isOpen && !st.isNearestOpen && st.dist > dMin + 0.5 && st.netSavingVsNearest >= 0.4
+      );
+
       return {
         ...st,
         rank: idx + 1,
         isCheapest,
-        diffToMin
+        isBestSmart,
+        diffToMin,
+        diffToBestNet,
+        isWorthwhileDetour
       };
     });
 
-    // Check lookahead buffer (1-4.5 km beyond effectiveRadiusKm) for a "Smart Detour" bargain
-    // Compare against the best open inside station (or best inside station) so net savings are genuine
-    const referenceInsideStation = bestInsideOpenStation || bestInsideStation;
-    const referencePrice = referenceInsideStation ? referenceInsideStation.activePrice : minPrice;
+    // 7. Apply Top-8 Cap (unless user clicked "Alle zeigen") to prevent visual overload in cities
+    const MAX_VISIBLE = 8;
+    const visiblePriced = showAll ? rankedAll : rankedAll.slice(0, MAX_VISIBLE);
+    const hiddenCount = Math.max(0, rankedAll.length - visiblePriced.length);
 
-    let smartDetour = null;
-    if (referenceInsideStation && referencePrice !== null) {
-      let bestOutside = null;
-      for (const outSt of outsideBufferStations) {
-        const p = outSt[fuelType];
-        // Detour target must be open and priced
-        if (!outSt.isOpen || typeof p !== 'number' || p <= 0) continue;
-        if (!bestOutside || p < bestOutside.activePrice || (p === bestOutside.activePrice && outSt.dist < bestOutside.dist)) {
-          bestOutside = { ...outSt, activePrice: p, isFavorite: favoritesSet.has(outSt.id) };
-        }
-      }
-
-      if (bestOutside && bestOutside.activePrice <= referencePrice - 0.02) {
-        const extraDistOneWay = Math.max(0.5, Number((bestOutside.dist - referenceInsideStation.dist).toFixed(1)));
-        const priceDiffPerLiter = Number((referencePrice - bestOutside.activePrice).toFixed(3));
-        const grossSaving = Number((priceDiffPerLiter * tankLiters).toFixed(2));
-        // Realistic round-trip detour fuel cost (vehicle consumption * 2 * extraDistOneWay)
-        const effectiveConsumption = Math.max(2.0, Math.min(25.0, Number(consumptionL100km) || 7.0));
-        const detourFuelLiters = (extraDistOneWay * 2 * effectiveConsumption) / 100;
-        const detourFuelCost = Number((detourFuelLiters * bestOutside.activePrice).toFixed(2));
-        const netSaving = Number((grossSaving - detourFuelCost).toFixed(2));
-
-        if (netSaving >= 0.5) {
-          smartDetour = {
-            station: bestOutside,
-            extraDistKm: extraDistOneWay,
-            outsideRadiusMarginKm: Number((bestOutside.dist - effectiveRadiusKm).toFixed(1)),
-            centsCheaper: Math.round(priceDiffPerLiter * 100),
-            grossSaving,
-            netSaving
-          };
-        }
-      }
-    }
-
-    const openCount = insideStations.filter((s) => s.isOpen && typeof s[fuelType] === 'number' && s[fuelType] > 0).length;
+    const maxDisplayedDist = visiblePriced.reduce((acc, s) => Math.max(acc, s.dist || 0), baseRadiusKm);
+    const effectiveRadiusKm = Math.max(3, Math.ceil(maxDisplayedDist));
+    const openCount = rankedAll.filter((s) => s.isOpen).length;
 
     return {
-      list: [...rankedPriced, ...unpricedStations],
+      list: visiblePriced,
+      hiddenCount,
+      totalRelevantCount: rankedAll.length,
       openCount,
-      totalCount: insideStations.length,
+      totalCount: rankedAll.length,
       minPrice,
       maxPrice,
       avgPrice,
       spreadPerLiter: minPrice !== null && maxPrice !== null ? Number((maxPrice - minPrice).toFixed(3)) : 0,
-      smartDetour,
+      smartDetour: null,
       effectiveRadiusKm,
-      autoExpanded
+      autoExpanded: false,
+      hasActiveHeading,
+      headingDeg
     };
   }
 
