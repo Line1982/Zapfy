@@ -768,30 +768,31 @@ class ZapfyApp {
         distHtml = `<span class="meta-dist-wrap"><svg class="route-dir-svg ${aheadClass}" style="transform:rotate(${st.relBearingDeg}deg)" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg><span>${distRawStr}</span></span>`;
       }
 
-      const streetStr = [st.street, st.houseNumber].filter(Boolean).join(' ') || st.place || '';
+      // Show ONLY city/place (no street address), fallback if place is missing
+      const placeStr = st.place || (st.street ? st.street : 'In der Nähe');
       const openStatusHtml = this.formatOpenStatusHtml(st);
 
-      let extraInfoHtml = '';
+      const statusItems = [openStatusHtml];
       if (st.routeStatus === 'ahead') {
-        extraInfoHtml += ` · <span class="meta-route-ahead">Auf Route</span>`;
+        statusItems.push(`<span class="meta-route-ahead">Auf Route</span>`);
       }
 
       if (st.isWorthwhileDetour) {
         const netSavStr = st.netSavingVsNearest.toFixed(2).replace('.', ',');
-        extraInfoHtml += ` · <span class="meta-worthwhile">Lohnt sich: −${netSavStr} € netto</span>`;
+        statusItems.push(`<span class="meta-worthwhile">Lohnt sich: −${netSavStr} € netto</span>`);
       } else if (st.isNearestOpen && st.diffToBestNet <= 0.15) {
-        extraInfoHtml += ` · <span class="meta-nearest-tag">Nächste · Optimal</span>`;
+        statusItems.push(`<span class="meta-nearest-tag">Nächste · Optimal</span>`);
       } else if (st.isNearestOpen) {
-        extraInfoHtml += ` · <span class="meta-nearest-tag">Nächste Station</span>`;
+        statusItems.push(`<span class="meta-nearest-tag">Nächste Station</span>`);
       } else if (this.sortMode === 'smart' && st.diffToBestNet > 0.15) {
         const extraNetCost = st.diffToBestNet.toFixed(2).replace('.', ',');
-        extraInfoHtml += ` · <span class="meta-extra-cost">+${extraNetCost} € (${this.config.tankVolume}L)</span>`;
+        statusItems.push(`<span class="meta-extra-cost">+${extraNetCost} € (${this.config.tankVolume}L)</span>`);
       } else if (st.diffToMin > 0.001) {
         const extraTankCost = (st.diffToMin * this.config.tankVolume).toFixed(2).replace('.', ',');
-        extraInfoHtml += ` · <span class="meta-extra-cost">+${extraTankCost} € (${this.config.tankVolume}L)</span>`;
+        statusItems.push(`<span class="meta-extra-cost">+${extraTankCost} € (${this.config.tankVolume}L)</span>`);
       }
 
-      const metaParts = [openStatusHtml, distHtml, this.escapeHtml(streetStr)].filter(Boolean).join(' · ');
+      const statusLineHtml = statusItems.filter(Boolean).join('<span class="meta-dot">·</span>');
 
       // Optional top banner if #1 station is a worthwhile detour further away than the nearest station
       let topDetourBannerHtml = '';
@@ -818,7 +819,12 @@ class ZapfyApp {
           <div class="station-top-row">
             <div class="station-info">
               <div class="station-brand">${this.escapeHtml(st.brand || st.name)}</div>
-              <div class="station-meta-line">${metaParts}${extraInfoHtml}</div>
+              <div class="station-line-loc">
+                <span class="station-place">${this.escapeHtml(placeStr)}</span>
+                <span class="meta-dot">·</span>
+                <span class="station-dist">${distHtml}</span>
+              </div>
+              <div class="station-line-status">${statusLineHtml}</div>
             </div>
 
             <div class="station-price-box">
@@ -1005,12 +1011,12 @@ class ZapfyApp {
           const gmaps = FuelApiService.getGoogleMapsLinks(stObj);
           const openStatusHtml = liveStation ? this.formatOpenStatusHtml(liveStation) : '';
           const distStr = typeof stObj.dist === 'number' && stObj.dist > 0 ? `${stObj.dist.toFixed(1).replace('.', ',')} km` : '';
-          const streetStr = [stObj.street, stObj.houseNumber].filter(Boolean).join(' ') || stObj.place || '';
+          const placeStr = stObj.place || stObj.street || '';
 
           const metaParts = [
             openStatusHtml,
             distStr ? `<span>${this.escapeHtml(distStr)}</span>` : '',
-            streetStr ? `<span>${this.escapeHtml(streetStr)}</span>` : '',
+            placeStr ? `<span>${this.escapeHtml(placeStr)}</span>` : '',
             `<span>Tief: ${minFmt.fullText}</span>`,
             `<span>${item.samples}×</span>`
           ].filter(Boolean).join(' · ');

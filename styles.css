@@ -489,11 +489,11 @@ html, body {
   background: linear-gradient(180deg, #ffffff 0%, #f5f8fd 100%);
   border: 1.5px solid rgba(15, 23, 42, 0.09);
   border-radius: var(--radius-lg);
-  padding: 12px 14px;
+  padding: 10px 12px;
   box-shadow: var(--shadow-tile);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   flex-shrink: 0;
   cursor: pointer;
   transition: transform 0.12s ease;
@@ -531,8 +531,8 @@ html, body {
   gap: 8px;
   background: rgba(255, 255, 255, 0.85);
   border-radius: 10px;
-  padding: 6px 10px;
-  font-size: 0.76rem;
+  padding: 5px 9px;
+  font-size: 0.74rem;
   font-weight: 800;
   color: #1e40af;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
@@ -550,7 +550,7 @@ html, body {
 
 .station-top-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
@@ -560,7 +560,7 @@ html, body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 1.5px;
 }
 
 .station-badges-row {
@@ -605,13 +605,64 @@ html, body {
 }
 
 .station-brand {
-  font-size: 1.05rem;
+  font-size: 1.02rem;
   font-weight: 900;
   color: var(--text-main);
   line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.station-line-loc {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.79rem;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.station-place {
+  font-weight: 800;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meta-dot {
+  color: var(--text-muted);
+  font-weight: 800;
+  opacity: 0.45;
+  margin: 0 1px;
+  flex-shrink: 0;
+}
+
+.station-dist {
+  font-weight: 700;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.station-line-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.station-line-status > span {
+  white-space: nowrap;
 }
 
 .station-address {
@@ -775,13 +826,13 @@ html, body {
 
 .btn-gmaps-route {
   flex: 1;
-  height: 42px;
+  height: 38px;
   border: none;
-  border-radius: 12px;
+  border-radius: 11px;
   background: linear-gradient(180deg, #5e56f8 0%, #4338ca 100%);
   color: #ffffff;
   font-family: inherit;
-  font-size: 0.88rem;
+  font-size: 0.86rem;
   font-weight: 900;
   text-decoration: none;
   display: flex;
@@ -789,7 +840,7 @@ html, body {
   justify-content: center;
   gap: 6px;
   box-shadow:
-    0 6px 14px -3px rgba(67, 56, 202, 0.42),
+    0 5px 12px -3px rgba(67, 56, 202, 0.42),
     inset 0 1px 0 rgba(255, 255, 255, 0.35),
     inset 0 -2px 0 rgba(0, 0, 0, 0.2);
   cursor: pointer;
@@ -811,10 +862,10 @@ html, body {
 }
 
 .btn-gmaps-pin {
-  height: 42px;
+  height: 38px;
   padding: 0 12px;
   border: none;
-  border-radius: 12px;
+  border-radius: 11px;
   background: linear-gradient(180deg, #ffffff 0%, #f1f5fb 100%);
   color: var(--text-main);
   font-family: inherit;
