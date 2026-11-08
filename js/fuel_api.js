@@ -191,6 +191,43 @@ export class FuelApiService {
   }
 
   /**
+   * Peeks the current persistent token bucket status without consuming a token.
+   */
+  static peekTokenState() {
+    const now = Date.now();
+    let tokens = BUCKET_CAPACITY;
+    let lastRefill = now;
+    let blockedUntil = 0;
+
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_BUCKET);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed.tokens === 'number' && typeof parsed.lastRefill === 'number') {
+          tokens = parsed.tokens;
+          lastRefill = parsed.lastRefill;
+          blockedUntil = Number(parsed.blockedUntil) || 0;
+        }
+      }
+    } catch { /* ignore */ }
+
+    const elapsed = Math.max(0, now - lastRefill);
+    const refillTokens = elapsed / BUCKET_REFILL_MS;
+    const currentTokens = Math.min(BUCKET_CAPACITY, tokens + refillTokens);
+    const isBlocked = now < blockedUntil;
+    const waitSec = isBlocked
+      ? Math.ceil((blockedUntil - now) / 1000)
+      : (currentTokens < 1.0 ? Math.ceil(((1.0 - currentTokens) * BUCKET_REFILL_MS) / 1000) : 0);
+
+    return {
+      tokens: currentTokens,
+      isBlocked,
+      waitSec,
+      ready: !isBlocked && currentTokens >= 1.0
+    };
+  }
+
+  /**
    * Records a server-side HTTP 503 Rate Limit response into the persistent bucket state.
    */
   static registerServerRateLimit503() {
@@ -301,6 +338,81 @@ export class FuelApiService {
         defaultOpts
       );
     });
+  }
+
+  /**
+   * Starts continuous, battery-optimized GPS watching (Drive Mode).
+   * Fires on every significant position change, computing macro travel heading.
+   */
+  static startLocationWatch(onUpdate, onError, options = {}) {
+    if (!navigator.geolocation) {
+      if (typeof onError === 'function') onError(new Error('GPS wird von diesem Browser nicht unterstützt.'));
+      return null;
+    }
+
+    const defaultOpts = {
+      enableHighAccuracy: true,
+      maximumAge: 4000,
+      timeout: 15000,
+      ...options
+    };
+
+    return navigator.geolocation.watchPosition(
+      (pos) => {
+        const lat = Number(pos.coords.latitude.toFixed(6));
+        const lng = Number(pos.coords.longitude.toFixed(6));
+        const accuracy = Math.round(pos.coords.accuracy || 0);
+        const timestamp = pos.timestamp || Date.now();
+        const rawHeading = typeof pos.coords.heading === 'number' && !isNaN(pos.coords.heading) ? pos.coords.heading : null;
+        const speedMps = typeof pos.coords.speed === 'number' && !isNaN(pos.coords.speed) ? pos.coords.speed : null;
+        const headingDeg = this.updateAndComputeMacroHeading({
+          lat,
+          lng,
+          rawHeading,
+          speedMps,
+          accuracy,
+          timestamp
+        });
+
+        if (typeof onUpdate === 'function') {
+          onUpdate({
+            lat,
+            lng,
+            accuracy,
+            headingDeg,
+            speedMps,
+            timestamp
+          });
+        }
+      },
+      (err) => {
+        if (typeof onError === 'function') onError(err);
+      },
+      defaultOpts
+    );
+  }
+
+  /**
+   * Stops continuous GPS watching.
+   */
+  static stopLocationWatch(watchId) {
+    if (watchId !== null && typeof watchId !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.clearWatch(watchId);
+    }
+  }
+
+  /**
+   * Screen Wake Lock manager so phone display stays on in car phone mount.
+   */
+  static async requestScreenWakeLock() {
+    if ('wakeLock' in navigator && typeof navigator.wakeLock.request === 'function') {
+      try {
+        return await navigator.wakeLock.request('screen');
+      } catch {
+        return null;
+      }
+    }
+    return null;
   }
 
   /**

@@ -50,6 +50,12 @@ class ZapfyApp {
     this.stationDetailsMap = new Map();
     this.snapshots = [];
     this.isFetching = false;
+
+    // Drive Mode & Continuous Auto-Radar State
+    this.gpsWatchId = null;
+    this.lastFetchLocation = null;
+    this.wakeLock = null;
+    this.lastLocalUiUpdateMs = 0;
   }
 
   async init() {
@@ -63,6 +69,12 @@ class ZapfyApp {
     // Immediately render cached/initial state, then acquire GPS & live prices on startup
     this.renderAll();
     await this.refreshGpsAndFetchPrices({ silentGpsFallback: true });
+
+    // Activate Drive Mode (continuous low-cost GPS watch + screen wake lock for car phone mount)
+    this.startDriveModeWatcher();
+    this.initScreenWakeLock();
+    this.initVisibilityListener();
+
     this.registerServiceWorker();
   }
 
@@ -444,19 +456,31 @@ class ZapfyApp {
     };
   }
 
-  async fetchPricesForCurrentLocation() {
+  async fetchPricesForCurrentLocation({ silent = false } = {}) {
     this.isFetching = true;
     try {
+      // Fast drive / highway detection -> dynamically expand corridor to 25 km
+      const isFastDrive = (typeof this.currentLocation.speedMps === 'number' && this.currentLocation.speedMps >= 14) || this.currentLocation.headingDeg !== null;
+      const corridorRad = isFastDrive ? 25 : 15;
+
       const res = await FuelApiService.fetchStations({
         lat: this.currentLocation.lat,
         lng: this.currentLocation.lng,
-        radiusKm: 15,
+        radiusKm: corridorRad,
         apiKey: this.config.apiKey,
         demoMode: this.config.demoMode
       });
 
       this.stations = res.stations || [];
       this.dataSource = res.source;
+
+      // Anchor last fetch location & timestamp for smart drive-mode triggering
+      this.lastFetchLocation = {
+        lat: this.currentLocation.lat,
+        lng: this.currentLocation.lng,
+        isLiveGps: Boolean(this.currentLocation.isLiveGps),
+        timestamp: Date.now()
+      };
 
       // Save statistical price snapshots in IndexedDB + ensure 14-day history for nearby stations
       if (this.stations.length > 0) {
@@ -481,7 +505,7 @@ class ZapfyApp {
       const fuelShort = FUEL_LABELS[this.fuelType] || 'E10';
       const routeHint = this.currentLocation.headingDeg !== null ? ' · Route' : '';
       this.updateGpsToolbarStatus('ready', `${fuelShort}${routeHint} · ${timeStr}`);
-      if (res.rateLimited && res.waitSec) {
+      if (!silent && res.rateLimited && res.waitSec) {
         this.showToast(`Rate-Limit-Schutz aktiv (Cache genutzt, nächster Live-Abruf in ${res.waitSec}s)`);
       }
 
@@ -515,7 +539,9 @@ class ZapfyApp {
       }
     } catch (apiErr) {
       console.error('Fuel API Error:', apiErr);
-      this.showToast(`API-Hinweis: ${apiErr.message}`);
+      if (!silent) {
+        this.showToast(`API-Hinweis: ${apiErr.message}`);
+      }
       // Fallback to simulation so user is never left with an empty screen while driving
       const simStations = FuelApiService.generateSimulatedStations(
         this.currentLocation.lat,
@@ -546,6 +572,154 @@ class ZapfyApp {
     } catch {
       // Optional background collector file not present yet — safely ignore
     }
+  }
+
+  // --- Auto-Radar & Drive-Mode Management ---
+
+  startDriveModeWatcher() {
+    if (this.gpsWatchId !== null) return;
+    this.gpsWatchId = FuelApiService.startLocationWatch(
+      (coords) => this.handleDriveGpsTick(coords),
+      (err) => {
+        console.warn('Drive-Mode GPS Watch Warning:', err.message);
+      }
+    );
+  }
+
+  stopDriveModeWatcher() {
+    if (this.gpsWatchId !== null) {
+      FuelApiService.stopLocationWatch(this.gpsWatchId);
+      this.gpsWatchId = null;
+    }
+  }
+
+  async handleDriveGpsTick(coords) {
+    if (!coords || typeof coords.lat !== 'number' || typeof coords.lng !== 'number') return;
+
+    // Suppress stationary GPS jitter (< 80 meters)
+    const movedKm = FuelApiService.calculateDistanceKm(
+      this.currentLocation.lat,
+      this.currentLocation.lng,
+      coords.lat,
+      coords.lng
+    );
+
+    if (movedKm < 0.08) return;
+
+    // Update current location with live GPS coordinates, heading, speed
+    this.currentLocation = {
+      lat: coords.lat,
+      lng: coords.lng,
+      accuracy: coords.accuracy,
+      headingDeg: coords.headingDeg ?? this.currentLocation.headingDeg,
+      speedMps: coords.speedMps ?? this.currentLocation.speedMps,
+      isLiveGps: true,
+      updatedAt: new Date()
+    };
+
+    // Stufe 1: Zero-Cost Local UI Update (re-evaluates live distances & ahead/behind status, max every 2.5s)
+    const now = Date.now();
+    if (now - this.lastLocalUiUpdateMs >= 2500) {
+      this.lastLocalUiUpdateMs = now;
+      const timeStr = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+      const fuelShort = FUEL_LABELS[this.fuelType] || 'E10';
+      const routeHint = this.currentLocation.headingDeg !== null ? ' · Route' : '';
+      this.updateGpsToolbarStatus('ready', `${fuelShort}${routeHint} · ${timeStr}`);
+      this.renderAll();
+    }
+
+    // Stufe 2: Evaluate API-Refetch Gatekeeper
+    await this.evaluateAutoApiRefetch(coords);
+  }
+
+  async evaluateAutoApiRefetch(coords) {
+    if (this.isFetching) return;
+
+    if (!this.lastFetchLocation) {
+      this.lastFetchLocation = {
+        lat: coords.lat,
+        lng: coords.lng,
+        isLiveGps: Boolean(this.currentLocation.isLiveGps),
+        timestamp: Date.now()
+      };
+      return;
+    }
+
+    const tokenState = FuelApiService.peekTokenState();
+    if (tokenState.isBlocked) return;
+
+    // Edge-Case Fix: First true GPS fix after cold launch with fallback location -> fetch immediately for true location
+    const wasFallbackLaunch = !this.lastFetchLocation.isLiveGps && this.currentLocation.isLiveGps;
+    if (wasFallbackLaunch && tokenState.ready) {
+      await this.fetchPricesForCurrentLocation({ silent: true });
+      return;
+    }
+
+    const distSinceFetchKm = FuelApiService.calculateDistanceKm(
+      this.lastFetchLocation.lat,
+      this.lastFetchLocation.lng,
+      coords.lat,
+      coords.lng
+    );
+    const elapsedMs = Date.now() - this.lastFetchLocation.timestamp;
+
+    // Trigger matrix
+    const isHighwayPace = distSinceFetchKm >= 5.0;
+    const isNormalDrive = distSinceFetchKm >= 2.5;
+    const isLongStop = elapsedMs >= 15 * 60 * 1000;
+
+    let shouldFetch = false;
+
+    if (isHighwayPace) {
+      // With >= 2 tokens: allow fast refetch at 3.5 min; otherwise standard 4.5 min
+      const minIntervalMs = tokenState.tokens >= 2.0 ? 3.5 * 60 * 1000 : 4.5 * 60 * 1000;
+      shouldFetch = elapsedMs >= minIntervalMs && tokenState.ready;
+    } else if (isNormalDrive) {
+      shouldFetch = elapsedMs >= 4.5 * 60 * 1000 && tokenState.ready;
+    } else if (isLongStop) {
+      // Stationary price refresh (rest area / traffic jam > 15 min)
+      shouldFetch = tokenState.ready;
+    }
+
+    if (shouldFetch) {
+      await this.fetchPricesForCurrentLocation({ silent: true });
+    }
+  }
+
+  async initScreenWakeLock() {
+    this.wakeLock = await FuelApiService.requestScreenWakeLock();
+    if (this.wakeLock) {
+      this.wakeLock.addEventListener('release', () => {
+        this.wakeLock = null;
+      });
+    }
+  }
+
+  async releaseScreenWakeLock() {
+    if (this.wakeLock && typeof this.wakeLock.release === 'function') {
+      try {
+        await this.wakeLock.release();
+      } catch { /* ignore */ }
+      this.wakeLock = null;
+    }
+  }
+
+  initVisibilityListener() {
+    document.addEventListener('visibilitychange', async () => {
+      if (document.hidden) {
+        // App put into background (e.g. driver switched to Google Maps) -> save battery
+        this.stopDriveModeWatcher();
+        await this.releaseScreenWakeLock();
+      } else {
+        // Driver returned to Zapfy -> re-acquire screen wake lock & GPS watch
+        await this.initScreenWakeLock();
+        this.startDriveModeWatcher();
+        // Check immediate refetch if significant distance/time elapsed while in background
+        if (this.currentLocation.isLiveGps) {
+          await this.evaluateAutoApiRefetch(this.currentLocation);
+        }
+      }
+    });
   }
 
   /**

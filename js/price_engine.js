@@ -69,12 +69,18 @@ export class PriceEngine {
     const effectiveTank = Math.max(10, Math.min(150, Number(tankLiters) || 50));
     const effectiveConsumption = Math.max(2.0, Math.min(25.0, Number(consumptionL100km) || 7.0));
 
-    const hasActiveHeading = Boolean(
+    const hasContextCoords = Boolean(
       travelContext &&
-      typeof travelContext.headingDeg === 'number' &&
-      !isNaN(travelContext.headingDeg) &&
       typeof travelContext.lat === 'number' &&
-      typeof travelContext.lng === 'number'
+      typeof travelContext.lng === 'number' &&
+      !isNaN(travelContext.lat) &&
+      !isNaN(travelContext.lng)
+    );
+
+    const hasActiveHeading = Boolean(
+      hasContextCoords &&
+      typeof travelContext.headingDeg === 'number' &&
+      !isNaN(travelContext.headingDeg)
     );
     const headingDeg = hasActiveHeading ? travelContext.headingDeg : null;
     const showAll = Boolean(travelContext && travelContext.showAll);
@@ -87,12 +93,18 @@ export class PriceEngine {
       const isFav = favoritesSet.has(st.id);
       const activePrice = typeof price === 'number' && price > 0 ? price : null;
 
+      // Live distance recomputation from current GPS coordinates during drive
+      const hasStationCoords = typeof st.lat === 'number' && typeof st.lng === 'number';
+      const liveDist = (hasContextCoords && hasStationCoords)
+        ? Number(FuelApiService.calculateDistanceKm(travelContext.lat, travelContext.lng, st.lat, st.lng).toFixed(2))
+        : (typeof st.dist === 'number' ? st.dist : 0);
+
       let bearingDeg = null;
       let relBearingDeg = null;
       let routeFactor = 1.0;
       let routeStatus = null; // 'ahead' | 'side' | 'behind' | null
 
-      if (hasActiveHeading && typeof st.lat === 'number' && typeof st.lng === 'number' && st.dist >= 0.25) {
+      if (hasActiveHeading && hasStationCoords && liveDist >= 0.25) {
         bearingDeg = FuelApiService.calculateBearingDeg(travelContext.lat, travelContext.lng, st.lat, st.lng);
         relBearingDeg = ((bearingDeg - headingDeg + 540) % 360) - 180; // [-180..+180]
         const absAngle = Math.abs(relBearingDeg);
@@ -107,9 +119,10 @@ export class PriceEngine {
         }
       }
 
-      const effectiveRoundTripKm = Number((2 * st.dist * routeFactor).toFixed(2));
+      const effectiveRoundTripKm = Number((2 * liveDist * routeFactor).toFixed(2));
       const enriched = {
         ...st,
+        dist: liveDist,
         activePrice,
         isFavorite: isFav,
         bearingDeg,

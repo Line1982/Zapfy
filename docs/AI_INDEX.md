@@ -9,7 +9,7 @@
 
 | Fachliche Aufgabe / Thema | Primäre Datei | Relevante Zeilen | Verbundene Dateien |
 | :--- | :--- | :--- | :--- |
-| **GPS-Ortung, Makro-Fahrtrichtung, Rate-Limiter & Live-API** | [`js/fuel_api.js`](file:///d:/Dev/Zapfy/js/fuel_api.js) | **10–400** (`updateAndComputeMacroHeading`, `checkAndConsumeToken`, `fetchStations`) | `js/app.js`: `refreshGpsAndFetchPrices` |
+| **GPS-Ortung, Makro-Fahrtrichtung, Rate-Limiter, Watcher & Live-API** | [`js/fuel_api.js`](file:///d:/Dev/Zapfy/js/fuel_api.js) | **10–480** (`updateAndComputeMacroHeading`, `checkAndConsumeToken`, `startLocationWatch`, `fetchStations`) | `js/app.js`: `refreshGpsAndFetchPrices`, `handleDriveGpsTick` |
 | **Öffnungszeiten & 1-Tap Google Maps Deep-Links** | [`js/fuel_api.js`](file:///d:/Dev/Zapfy/js/fuel_api.js) | **415–550** (`fetchStationDetail`, `pickTodayOpeningEntry`, `getGoogleMapsLinks`) | `js/app.js`: `renderStationsList` |
 | **MTS-K Tageszeit-Kurve & 14-Tage-Standort-Historie** | [`js/fuel_api.js`](file:///d:/Dev/Zapfy/js/fuel_api.js) | **555–720** (`getTypicalHourlyOffset`, `generateSimulatedStations`, `buildLocation14DayHistory`) | `js/app.js`: `fetchPricesForCurrentLocation` |
 | **Hintergrund-Sammler & 14-Tage Backfill (Python)** | [`collector.py`](file:///d:/Dev/Zapfy/collector.py) | **1–276** (`run_backfill`, `run_single_poll`) | `data/price_history.json` |
