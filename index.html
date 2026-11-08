@@ -95,66 +95,45 @@
 
           <!-- Top Bar: Forecast Subview Switch -->
           <div class="history-top-bar">
-            <div class="forecast-header-badge">
-              <span class="forecast-header-eyebrow">KI & MTS-K Analyse</span>
-              <strong class="forecast-header-title" id="statsFuelTitle">Super E10 Prognose</strong>
-            </div>
+            <h2 class="forecast-header-title" id="statsFuelTitle">Super E10 Prognose</h2>
 
-            <div class="view-switch">
-              <button type="button" class="view-pill active" data-subview="cycle">Tagesverlauf</button>
-              <button type="button" class="view-pill" data-subview="history">Ranking</button>
+            <div class="view-switch" role="tablist">
+              <button type="button" class="view-pill active" data-subview="cycle" role="tab" aria-selected="true">Tagesverlauf</button>
+              <button type="button" class="view-pill" data-subview="history" role="tab" aria-selected="false">Günstigste</button>
             </div>
           </div>
 
-          <!-- Smart Recommendation Hero Banner -->
-          <div class="recommendation-hero" id="recommendationHero">
-            <div class="rec-top-row">
-              <span class="rec-eyebrow">Tank-Empfehlung</span>
-              <span class="rec-window-pill" id="recBestWindow">Bestzeit: 18:00–20:30</span>
+          <!-- Quiet Recommendation Bar (Zero visual noise) -->
+          <div class="forecast-status-card" id="recommendationHero">
+            <span class="status-indicator-dot" aria-hidden="true"></span>
+            <div class="status-text-wrap">
+              <strong class="status-headline" id="recHeadline">Lade Preisprognose…</strong>
+              <span class="status-subline" id="recSubline">Sammle Preisdaten im Umkreis…</span>
             </div>
-            <div class="rec-headline" id="recHeadline">Lade Preisprognose…</div>
-            <div class="rec-subline" id="recSubline">Sammle Preisdaten im Umkreis…</div>
+            <span class="status-window-badge" id="recBestWindow">18–20h</span>
           </div>
 
-          <!-- Compact Historical Summary Bar -->
-          <div class="history-summary-bar">
-            <span>Tief: <strong id="histMinVal" class="text-emerald">—,-- €</strong></span>
-            <span>Schnitt: <strong id="histAvgVal">—,-- €</strong></span>
-            <span>Messungen: <strong id="histSnapCount">0</strong></span>
-          </div>
-
-          <!-- Subview 2A: Intraday Bar Chart, Weekday Comparison & Tank Savings Check -->
+          <!-- Subview 2A: Intraday Timeline & Weekday Comparison -->
           <div class="stats-scroll-area stats-cycle-layout" id="statsCycleView">
 
-            <!-- Intraday Hourly Price Curve Card (Flex-grows to fill screen harmoniously) -->
-            <div class="stats-card-box stats-card-grow">
+            <!-- Intraday Horizontal Timeline Card (Zero intrusive vertical bars) -->
+            <div class="stats-card-box timeline-card-box">
               <div class="stats-card-header">
-                <span class="stats-card-title">Tagesverlauf (06–22 Uhr)</span>
-                <span class="stats-card-hint">Grün = Beste Tankzeit</span>
+                <span class="stats-card-title">Tagesverlauf (06–22h)</span>
+                <span class="stats-card-hint" id="hourlyChartHint">Bestzeit: 18:00–20:30 Uhr</span>
               </div>
-              <div class="hourly-chart-grid" id="hourlyChartGrid">
-                <!-- Populated dynamically -->
+              <div class="timeline-container" id="hourlyChartGrid">
+                <!-- Populated dynamically: Quiet Track + Pins + 3 Key Price Milestones -->
               </div>
             </div>
 
             <!-- Weekday Price Comparison Card -->
-            <div class="stats-card-box">
+            <div class="stats-card-box stats-weekday-box">
               <div class="stats-card-header">
-                <span class="stats-card-title">Wochentags-Trend (Mo–So)</span>
-                <span class="stats-card-hint">Ø Preisniveau</span>
+                <span class="stats-card-title">Wochentags-Trend</span>
+                <span class="stats-card-hint" id="weekdayTrendHint">Ø Preise</span>
               </div>
               <div class="weekday-grid" id="weekdayChartGrid">
-                <!-- Populated dynamically -->
-              </div>
-            </div>
-
-            <!-- Concrete Tank Cost & Savings Check Card (Uses the bottom space meaningfully) -->
-            <div class="stats-card-box">
-              <div class="stats-card-header">
-                <span class="stats-card-title" id="tankCheckTitle">Tankfüllung-Check (50 L)</span>
-                <span class="stats-card-hint" id="tankCheckSpreadHint">Tages-Schwankung</span>
-              </div>
-              <div class="tank-check-grid" id="tankCheckGrid">
                 <!-- Populated dynamically -->
               </div>
             </div>

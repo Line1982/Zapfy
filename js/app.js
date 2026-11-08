@@ -859,51 +859,97 @@ class ZapfyApp {
       fuelTitleEl.textContent = `${FUEL_LABELS[this.fuelType]} Prognose`;
     }
 
-    // Recommendation Hero Banner
+    // Recommendation Bar (Zero visual noise)
     const heroEl = document.getElementById('recommendationHero');
     const windowEl = document.getElementById('recBestWindow');
     const headlineEl = document.getElementById('recHeadline');
     const sublineEl = document.getElementById('recSubline');
 
     if (heroEl) {
-      heroEl.className = `recommendation-hero signal-${forecast.signal}`;
+      heroEl.className = `forecast-status-card signal-${forecast.signal}`;
     }
-    if (windowEl) windowEl.textContent = `Bestzeit: ${forecast.bestWindowText}`;
+    if (windowEl) windowEl.textContent = forecast.bestWindowText || '18–20h';
     if (headlineEl) headlineEl.textContent = forecast.headline;
     if (sublineEl) sublineEl.textContent = forecast.subline;
 
-    // Summary Strip
-    const minEl = document.getElementById('histMinVal');
-    const avgEl = document.getElementById('histAvgVal');
-    const countEl = document.getElementById('histSnapCount');
-
-    if (minEl) minEl.textContent = PriceEngine.formatPriceParts(forecast.histMin).fullText;
-    if (avgEl) avgEl.textContent = PriceEngine.formatPriceParts(forecast.histAvg).fullText;
-    if (countEl) countEl.textContent = String(forecast.snapshotCount);
-
-    // 1. Hourly Bar Chart (06h - 22h)
-    const hourlyGrid = document.getElementById('hourlyChartGrid');
-    if (hourlyGrid) {
-      const nowHour = new Date().getHours();
-      hourlyGrid.innerHTML = forecast.hourlySlots.map((slot) => {
-        const isCurrentBucket = Math.abs(nowHour - slot.hour) <= 1;
-        const pFmt = PriceEngine.formatPriceParts(slot.price);
-        return `
-          <div class="hour-col ${slot.isBestWindow || slot.isLowest ? 'is-best' : ''} ${isCurrentBucket ? 'is-now' : ''}">
-            <span class="hour-price-tag">${pFmt.main}⁹</span>
-            <div class="hour-bar-track">
-              <div class="hour-bar-fill" style="height: ${slot.barHeightPct}%;"></div>
-            </div>
-            <span class="hour-label">${slot.label}</span>
-          </div>
-        `;
-      }).join('');
+    // 1. Intraday Horizontal Timeline (Replaces intrusive vertical bars)
+    const timelineContainer = document.getElementById('hourlyChartGrid');
+    const hourlyHintEl = document.getElementById('hourlyChartHint');
+    if (hourlyHintEl) {
+      hourlyHintEl.textContent = `Bestzeit: ${forecast.bestWindowText || '18–20 Uhr'}`;
     }
 
-    // 2. Weekday Trend Grid (Mo - So)
+    if (timelineContainer && forecast.hourlySlots?.length) {
+      const now = new Date();
+      const nowHour = now.getHours();
+      const nowMin = now.getMinutes();
+
+      // Timeline Scale: 06:00 to 22:00 = 16 hours = 960 minutes
+      const startHour = 6;
+      const endHour = 22;
+      const totalMinutes = (endHour - startHour) * 60; // 960
+      const currentMinutesFromStart = Math.max(0, Math.min(totalMinutes, (nowHour - startHour) * 60 + nowMin));
+      const nowPct = Math.max(2, Math.min(98, (currentMinutesFromStart / totalMinutes) * 100)).toFixed(1);
+
+      // Best Window: 17:00 to 21:00 (68.75% to 93.75%)
+      const bestStartPct = (((17 - startHour) * 60) / totalMinutes * 100).toFixed(1);
+      const bestWidthPct = (((21 - 17) * 60) / totalMinutes * 100).toFixed(1);
+
+      // Key Milestones: Morning Peak (08h), Current, Evening Low (19h)
+      const morningSlot = forecast.hourlySlots.find((s) => s.hour === 8) || forecast.hourlySlots[1] || forecast.hourlySlots[0];
+      const eveningSlot = forecast.hourlySlots.find((s) => s.hour === 18 || s.hour === 20) || forecast.hourlySlots[5] || { price: forecast.eveningExpectedMin || 1.659 };
+      const currentSlot = forecast.hourlySlots.find((s) => Math.abs(s.hour - nowHour) <= 1) || { price: ranking.minPrice || morningSlot.price };
+
+      const mPriceFmt = PriceEngine.formatPriceParts(morningSlot.price);
+      const cPriceFmt = PriceEngine.formatPriceParts(currentSlot.price);
+      const ePriceFmt = PriceEngine.formatPriceParts(eveningSlot.price);
+
+      timelineContainer.innerHTML = `
+        <div class="timeline-track-wrap">
+          <div class="timeline-track">
+            <div class="timeline-best-zone" style="left: ${bestStartPct}%; width: ${bestWidthPct}%;" title="Bestpreis-Fenster"></div>
+            <div class="timeline-now-pin" style="left: ${nowPct}%;">
+              <span class="timeline-now-label">Jetzt</span>
+              <span class="timeline-now-dot"></span>
+            </div>
+          </div>
+          <div class="timeline-scale">
+            <span>06:00</span>
+            <span>12:00</span>
+            <span class="text-emerald">18:00 (Tief)</span>
+            <span>22:00</span>
+          </div>
+        </div>
+
+        <div class="timeline-milestones">
+          <div class="timeline-milestone">
+            <span class="milestone-label">Morgens</span>
+            <span class="milestone-price">${mPriceFmt.fullText}</span>
+          </div>
+          <div class="timeline-milestone is-now">
+            <span class="milestone-label">Aktuell</span>
+            <span class="milestone-price">${cPriceFmt.fullText}</span>
+          </div>
+          <div class="timeline-milestone is-best">
+            <span class="milestone-label">Abends (Bestzeit)</span>
+            <span class="milestone-price">${ePriceFmt.fullText}</span>
+          </div>
+        </div>
+      `;
+    }
+
+    // 2. Weekday Trend Grid (Mo - So, streamlined & calm)
     const weekdayGrid = document.getElementById('weekdayChartGrid');
-    if (weekdayGrid) {
+    const weekdayHintEl = document.getElementById('weekdayTrendHint');
+
+    if (weekdayGrid && forecast.weekdayStats?.length) {
       const minDayAvg = Math.min(...forecast.weekdayStats.map((d) => d.avg));
+      const cheapestDay = forecast.weekdayStats.find((d) => Math.abs(d.avg - minDayAvg) < 0.003);
+
+      if (weekdayHintEl && cheapestDay) {
+        weekdayHintEl.textContent = `${cheapestDay.label} meist am günstigsten`;
+      }
+
       weekdayGrid.innerHTML = forecast.weekdayStats.map((d) => {
         const isCheapest = Math.abs(d.avg - minDayAvg) < 0.003;
         const pFmt = PriceEngine.formatPriceParts(d.avg);
@@ -916,55 +962,7 @@ class ZapfyApp {
       }).join('');
     }
 
-    // 3. Tank Cost & Intraday Swing Check (Fills bottom space with concrete Euro numbers)
-    const tankTitleEl = document.getElementById('tankCheckTitle');
-    const tankSpreadHintEl = document.getElementById('tankCheckSpreadHint');
-    const tankGridEl = document.getElementById('tankCheckGrid');
-
-    if (tankTitleEl) {
-      tankTitleEl.textContent = `Tankfüllung-Check (${this.config.tankVolume} L)`;
-    }
-
-    if (tankGridEl) {
-      const liters = this.config.tankVolume;
-      const nowPrice = ranking.minPrice || forecast.histAvg || 1.659;
-      const evePrice = forecast.eveningExpectedMin || nowPrice;
-      const slotPrices = (forecast.hourlySlots || []).map((s) => s.price);
-      const morningPeakPrice = slotPrices.length > 0 ? Math.max(...slotPrices) : nowPrice + 0.08;
-      const dailySwingCents = Math.max(1, Math.round((morningPeakPrice - evePrice) * 100));
-      const maxSavingEuro = Math.max(0, (morningPeakPrice - evePrice) * liters).toFixed(2).replace('.', ',');
-
-      if (tankSpreadHintEl) {
-        tankSpreadHintEl.textContent = `Ø ${dailySwingCents} ct/L Spanne (−${maxSavingEuro} €)`;
-      }
-
-      const costNow = (nowPrice * liters).toFixed(2).replace('.', ',');
-      const costEve = (evePrice * liters).toFixed(2).replace('.', ',');
-      const costPeak = (morningPeakPrice * liters).toFixed(2).replace('.', ',');
-      const diffEve = Math.max(0, (nowPrice - evePrice) * liters).toFixed(2).replace('.', ',');
-
-      tankGridEl.innerHTML = `
-        <div class="tank-check-cell">
-          <span class="tank-check-label">Jetzt (#1)</span>
-          <span class="tank-check-val">${costNow} €</span>
-          <span class="tank-check-sub">${PriceEngine.formatPriceParts(nowPrice).fullText}/L</span>
-        </div>
-
-        <div class="tank-check-cell is-best-cost">
-          <span class="tank-check-label">Abends (19h)</span>
-          <span class="tank-check-val">${costEve} €</span>
-          <span class="tank-check-sub">${Number(diffEve.replace(',', '.')) > 0.1 ? `−${diffEve} € sparen` : 'Bestpreis'}</span>
-        </div>
-
-        <div class="tank-check-cell">
-          <span class="tank-check-label">Morgens (07h)</span>
-          <span class="tank-check-val">${costPeak} €</span>
-          <span class="tank-check-sub">Teuerste Phase</span>
-        </div>
-      `;
-    }
-
-    // 4. Historical Station Ranking List (Tab 2: Ranking Subview)
+    // 3. Historical Station Ranking List (Tab 2: Ranking Subview)
     const topListEl = document.getElementById('topStationsHistoryList');
     if (topListEl) {
       if (!forecast.topHistoricalStations || forecast.topHistoricalStations.length === 0) {

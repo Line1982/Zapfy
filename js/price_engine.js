@@ -474,26 +474,39 @@ export class PriceEngine {
     const spreadSavingNow = Number(((currentRanking?.spreadPerLiter || 0) * tankLiters).toFixed(2));
 
     let signal = 'good'; // 'optimal' | 'good' | 'wait'
-    let headline = 'Guter Zeitpunkt zum Tanken';
-    let subline = 'Preise liegen im normalen Tagesbereich.';
-    let bestWindowText = '18:00 – 20:30 Uhr';
+    let statusTag = 'Normal';
+    let headline = 'Normales Tagesniveau';
+    let subline = 'Preise aktuell stabil im Tagesverlauf.';
+    let bestWindowText = '18–20h';
 
     if (currentHour >= 17 && currentHour <= 21) {
       signal = 'optimal';
-      headline = 'Jetzt tanken! Abend-Tiefpreisphase aktiv';
-      subline = `Zwischen 18 und 21 Uhr sind die Kraftstoffpreise erfahrungsgemäß am tiefsten.`;
+      statusTag = 'Optimal';
+      headline = 'Jetzt tanken';
+      subline = 'Tiefpreisphase aktiv bis ca. 21:00 Uhr.';
+      bestWindowText = '18–21h';
     } else if (currentHour >= 5 && currentHour <= 9) {
       signal = 'wait';
-      headline = 'Besser warten! Aktuell Morgen-Preisspitze';
-      subline = `Abends (18–20 Uhr) sinkt der Preis um ca. ${(expectedDropPerLiter * 100).toFixed(0)} ct/L (≈ ${potentialEveningSaving.toFixed(2).replace('.', ',')} € pro ${tankLiters}L-Tank).`;
+      statusTag = 'Warten';
+      headline = 'Besser bis 18 Uhr warten';
+      const savingStr = potentialEveningSaving > 0 ? ` (~${potentialEveningSaving.toFixed(2).replace('.', ',')} € Ersparnis)` : '';
+      const ctStr = (expectedDropPerLiter * 100).toFixed(0);
+      subline = `Ab ca. 18 Uhr ca. ${ctStr} ct/L günstiger${savingStr}.`;
+      bestWindowText = 'ab 18h';
     } else if (expectedDropPerLiter >= 0.03) {
       signal = 'wait';
-      headline = `Nach Möglichkeit bis 18:00 Uhr warten`;
-      subline = `Prognose für heute Abend: ca. ${this.formatPriceParts(eveningExpectedMin).fullText}/L (${(expectedDropPerLiter * 100).toFixed(0)} ct/L günstiger).`;
+      statusTag = 'Warten';
+      headline = 'Günstiger ab 18:00 Uhr';
+      const savingStr = potentialEveningSaving > 0 ? ` (~${potentialEveningSaving.toFixed(2).replace('.', ',')} € Ersparnis)` : '';
+      const ctStr = (expectedDropPerLiter * 100).toFixed(0);
+      subline = `Erwarteter Preisabfall heute Abend: ca. ${ctStr} ct/L${savingStr}.`;
+      bestWindowText = '18–20h';
     } else if (currentMin !== null && histAvg !== null && currentMin <= histAvg - 0.015) {
       signal = 'optimal';
-      headline = 'Jetzt günstig! Unter deinem historischen Schnitt';
-      subline = `Aktuelles Minimum (${this.formatPriceParts(currentMin).fullText}) liegt unter dem gespeicherten Durchschnitt (${this.formatPriceParts(histAvg).fullText}).`;
+      statusTag = 'Günstig';
+      headline = 'Jetzt günstig';
+      subline = 'Aktueller Preis liegt unter dem regionalen Schnitt.';
+      bestWindowText = 'Günstig';
     }
 
     // 5. Top Cheapest Recorded Stations from History
@@ -524,6 +537,7 @@ export class PriceEngine {
       potentialEveningSaving,
       spreadSavingNow,
       signal,
+      statusTag,
       headline,
       subline,
       bestWindowText,
