@@ -941,6 +941,8 @@ class ZapfyApp {
         statusItems.push(`<span class="meta-nearest-tag">Nächste · Optimal</span>`);
       } else if (st.isNearestOpen) {
         statusItems.push(`<span class="meta-nearest-tag">Nächste Station</span>`);
+      } else if (isWinner || (this.sortMode === 'smart' && st.isBestSmart)) {
+        statusItems.push(`<span class="meta-winner-tag">Empfehlung</span>`);
       } else if (this.sortMode === 'smart' && st.diffToBestNet > 0.15) {
         const extraNetCost = st.diffToBestNet.toFixed(2).replace('.', ',');
         statusItems.push(`<span class="meta-extra-cost">+${extraNetCost} € (${this.config.tankVolume}L)</span>`);
