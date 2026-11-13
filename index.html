@@ -10,16 +10,16 @@
   <meta name="apple-mobile-web-app-title" content="Zapfy">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="theme-color" content="#e6edf6">
+  <meta name="theme-color" content="#e6edf6" id="metaThemeColor">
   <meta name="format-detection" content="telephone=no">
 
   <!-- Manifest & Icons -->
-  <link rel="manifest" href="manifest.json?v=1.9.1">
-  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png?v=1.9.1">
-  <link rel="icon" type="image/png" href="assets/icon-192.png?v=1.9.1">
-  <link rel="icon" type="image/x-icon" href="assets/favicon.ico?v=1.9.1">
+  <link rel="manifest" href="manifest.json?v=2.0.0">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png?v=2.0.0">
+  <link rel="icon" type="image/png" href="assets/icon-192.png?v=2.0.0">
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico?v=2.0.0">
 
-  <link rel="stylesheet" href="styles.css?v=1.9.0">
+  <link rel="stylesheet" href="styles.css?v=2.0.0">
 </head>
 <body>
 
@@ -30,58 +30,85 @@
       <div class="tabs-track" id="tabsTrack">
 
         <!-- ========================================================
-             TAB 1: PREISE & RADAR (HAUPTFOKUS — GÜNSTIGSTE OBEN)
+             TAB 1: PREISE & RADAR (CAR-COCKPIT — DAUMEN-DOCK UNTEN)
              ======================================================== -->
         <section class="tab-screen" id="tab-radar" aria-label="Tankstellenpreise im Umkreis">
 
           <!-- Central Radar Control & Station List Card (Full Height, Zero Visual Noise) -->
           <div class="radar-card">
 
-            <!-- Single Compact Header Row: GPS Refresh + Active Fuel Label + Smart Sort Pills -->
-            <div class="gps-toolbar">
-              <button type="button" class="gps-locate-btn" id="btnRefreshGps" title="GPS-Standort &amp; Preise jetzt aktualisieren">
-                <svg class="gps-icon-svg" id="gpsStatusSvg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="12" cy="12" r="8"></circle>
-                  <line x1="12" y1="2" x2="12" y2="6"></line>
-                  <line x1="12" y1="18" x2="12" y2="22"></line>
-                  <line x1="2" y1="12" x2="6" y2="12"></line>
-                  <line x1="18" y1="12" x2="22" y2="12"></line>
-                </svg>
-                <span class="gps-label" id="gpsStatusText">GPS aktualisieren</span>
+            <!-- Quiet Glance-Only Top Status Strip (No forced reach during drive) -->
+            <div class="radar-status-strip">
+              <button type="button" class="radar-forecast-bar" id="btnRadarForecastBar" title="Zur Detail-Prognose wechseln">
+                <span class="radar-signal-dot" aria-hidden="true"></span>
+                <div class="radar-forecast-copy">
+                  <span class="radar-forecast-text" id="radarForecastText">Lade Preisprognose…</span>
+                  <span class="radar-gps-subline" id="gpsStatusText">GPS wird geortet…</span>
+                </div>
+                <span class="radar-forecast-meta" id="radarForecastMeta">18–20h ›</span>
               </button>
 
+              <button type="button" class="savings-trophy-pill" id="btnSavingsBadge" title="Deine gesamte Zapfy-Ersparnis (Antippen für Statistik)">
+                <span class="savings-trophy-icon" aria-hidden="true">🏆</span>
+                <span id="headerSavingsTotal">0,00 €</span>
+              </button>
+            </div>
+
+            <!-- Scrollable Station List (1 Dominant Hero + Compact Alternatives) -->
+            <div class="stations-scroll-area" id="stationsList" aria-live="polite">
+              <!-- Populated dynamically by js/app.js -->
+            </div>
+
+            <!-- Ultra-Clean Drive-HUD View (100 km/h Zero-Distraction Focus Mode) -->
+            <div class="drive-hud-panel" id="driveHudPanel" hidden aria-live="polite">
+              <!-- Populated dynamically by js/app.js -->
+            </div>
+
+            <!-- Ergonomic Bottom Thumb-Zone Dock (Sort, GPS Refresh, Drive-HUD, Night Mode) -->
+            <div class="thumb-dock" role="toolbar" aria-label="Schnellsteuerung für Autofahrt">
               <div class="radius-pills sort-pills" role="group" aria-label="Sortierung">
                 <button type="button" class="radius-pill sort-pill active" data-sort="smart" title="Smart-Ranking: Bester Netto-Deal aus Preis, Entfernung &amp; Fahrtrichtung">
-                  <svg class="sort-pill-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                  <svg class="sort-pill-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
                     <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
                   </svg>
                   <span>Smart</span>
                 </button>
                 <button type="button" class="radius-pill sort-pill" data-sort="price" title="Nach günstigstem Literpreis im sinnvollen Korridor sortieren">
-                  <svg class="sort-pill-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                  <svg class="sort-pill-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
                     <line x1="7" y1="7" x2="7.01" y2="7"></line>
                   </svg>
                   <span>Preis</span>
                 </button>
                 <button type="button" class="radius-pill sort-pill" data-sort="dist" title="Nach geringster Entfernung (bevorzugt in Fahrtrichtung) sortieren">
-                  <svg class="sort-pill-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                  <svg class="sort-pill-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
                     <polygon points="3 11 22 2 13 21 11 13 3 11"></polygon>
                   </svg>
                   <span>Nähe</span>
                 </button>
               </div>
-            </div>
 
-            <!-- Quiet 1-Line Forecast Strip (Tapping jumps to Tab 2 Prognose) -->
-            <button type="button" class="radar-forecast-bar" id="btnRadarForecastBar" title="Zur Detail-Prognose wechseln">
-              <span class="radar-forecast-text" id="radarForecastText">Lade Preisprognose…</span>
-              <span class="radar-forecast-meta" id="radarForecastMeta">18–20h ›</span>
-            </button>
+              <button type="button" class="thumb-icon-btn gps-locate-btn" id="btnRefreshGps" title="GPS-Standort &amp; Preise jetzt aktualisieren" aria-label="GPS aktualisieren">
+                <svg class="gps-icon-svg" id="gpsStatusSvg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="8"></circle>
+                  <line x1="12" y1="2" x2="12" y2="6"></line>
+                  <line x1="12" y1="18" x2="12" y2="22"></line>
+                  <line x1="2" y1="12" x2="6" y2="12"></line>
+                  <line x1="18" y1="12" x2="22" y2="12"></line>
+                </svg>
+              </button>
 
-            <!-- Scrollable Station List (Cheapest #1 Hero at Top + 1-Tap Google Maps) -->
-            <div class="stations-scroll-area" id="stationsList" aria-live="polite">
-              <!-- Populated dynamically by js/app.js -->
+              <button type="button" class="thumb-hud-btn" id="btnToggleHud" title="Fokus-Cockpit (Drive-HUD) umschalten" aria-pressed="false">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="2" y="4" width="20" height="16" rx="4"></rect>
+                  <path d="M8 14l4-4 4 4"></path>
+                </svg>
+                <span>HUD</span>
+              </button>
+
+              <button type="button" class="thumb-icon-btn" id="btnToggleNight" title="Tag-/Nacht-Cockpit umschalten" aria-label="Nachtmodus umschalten">
+                <span id="nightToggleIcon">🌙</span>
+              </button>
             </div>
 
           </div>
@@ -135,6 +162,24 @@
               </div>
               <div class="weekday-grid" id="weekdayChartGrid">
                 <!-- Populated dynamically -->
+              </div>
+            </div>
+
+            <!-- Personal Fuel Savings Trophy Card -->
+            <div class="stats-card-box stats-savings-box">
+              <div class="stats-card-header">
+                <span class="stats-card-title">🏆 Mein Spar-Konto</span>
+                <span class="stats-card-hint" id="statsFillCountHint">0× getankt</span>
+              </div>
+              <div class="savings-kpi-grid">
+                <div class="savings-kpi-tile">
+                  <span class="savings-kpi-label">Gesamt gespart</span>
+                  <strong class="savings-kpi-value text-emerald" id="statsSavingsTotal">0,00 €</strong>
+                </div>
+                <div class="savings-kpi-tile">
+                  <span class="savings-kpi-label">Ø pro Tankstopp</span>
+                  <strong class="savings-kpi-value" id="statsSavingsAvg">0,00 €</strong>
+                </div>
               </div>
             </div>
 
@@ -277,8 +322,8 @@
             <div class="setup-status-grid">
               <div class="setup-info-tile">
                 <span class="info-tile-label">App-Version</span>
-                <strong class="info-tile-value">Zapfy v1.9</strong>
-                <span class="info-tile-sub">Zero-Build PWA</span>
+                <strong class="info-tile-value">Zapfy v2.0</strong>
+                <span class="info-tile-sub">Car-Cockpit PWA</span>
               </div>
               <div class="setup-info-tile">
                 <span class="info-tile-label">Preis-Statistik</span>
@@ -378,6 +423,6 @@
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
   <!-- App Entry Script -->
-  <script type="module" src="js/app.js?v=1.9.0"></script>
+  <script type="module" src="js/app.js?v=2.0.0"></script>
 </body>
 </html>

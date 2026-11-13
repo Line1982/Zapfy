@@ -36,3 +36,6 @@ Benutzereinstellungen (Hinweis: `apiKey` wird bei JSON-Backups aus Datenschutzgr
 - `defaultFuel`: Standard-Kraftstoffsorte (`"e10"`, `"e5"`, `"diesel"`)
 - `radiusKm`: Suchradius in km (`3`, `5`, `10`, `15`)
 - `fallbackRegion`: `"lat,lng"` Fallback-Koordinaten, falls GPS im Browser deaktiviert ist
+- `themeMode`: Cockpit-Farbschema (`"auto"`, `"dark"`, `"light"`)
+- `savingsTotal`: Kumulierte bestätigte Ersparnis in Euro (z. B. `28.40`)
+- `fillCount`: Anzahl verbuchter Tankvorgänge (`✓ Hier getankt`)
