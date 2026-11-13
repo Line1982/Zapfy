@@ -84,6 +84,7 @@ export class PriceEngine {
     );
     const headingDeg = hasActiveHeading ? travelContext.headingDeg : null;
     const showAll = Boolean(travelContext && travelContext.showAll);
+    const skippedIds = travelContext && travelContext.skippedIds instanceof Set ? travelContext.skippedIds : null;
 
     const pricedAll = [];
     const unpricedAll = [];
@@ -321,10 +322,15 @@ export class PriceEngine {
       };
     });
 
-    // 7. Apply Top-8 Cap (unless user clicked "Alle zeigen") to prevent visual overload in cities
+    // 7. Filter skipped stations AFTER anchor/Pareto/stats so skipping keeps the list stable,
+    //    then apply Top-8 Cap (unless user clicked "Alle zeigen") to prevent visual overload in cities
+    const unskippedRanked = skippedIds && skippedIds.size > 0
+      ? rankedAll.filter((s) => !skippedIds.has(s.id))
+      : rankedAll;
+
     const MAX_VISIBLE = 8;
-    const visiblePriced = showAll ? rankedAll : rankedAll.slice(0, MAX_VISIBLE);
-    const hiddenCount = Math.max(0, rankedAll.length - visiblePriced.length);
+    const visiblePriced = showAll ? unskippedRanked : unskippedRanked.slice(0, MAX_VISIBLE);
+    const hiddenCount = Math.max(0, unskippedRanked.length - visiblePriced.length);
 
     const maxDisplayedDist = visiblePriced.reduce((acc, s) => Math.max(acc, s.dist || 0), baseRadiusKm);
     const effectiveRadiusKm = Math.max(3, Math.ceil(maxDisplayedDist));

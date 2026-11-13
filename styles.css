@@ -1370,6 +1370,41 @@ html, body {
   color: var(--text-main);
 }
 
+.savings-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btn-savings-action {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-pill-grad);
+  color: var(--primary);
+  font-family: inherit;
+  font-size: 0.74rem;
+  font-weight: 800;
+  padding: 6px 11px;
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-pill-raised);
+  cursor: pointer;
+}
+
+.btn-savings-action:active {
+  transform: scale(0.97);
+}
+
+.btn-savings-action.is-danger {
+  color: var(--rose);
+}
+
+.btn-savings-action.is-danger.is-confirming {
+  background: var(--rose);
+  color: #ffffff;
+  border-color: var(--rose);
+}
+
 .btn-fav-station {
   width: 42px;
   height: 42px;
@@ -2364,4 +2399,36 @@ html, body {
   font-weight: 800;
   text-align: center;
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+}
+
+.toast-msg.has-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: left;
+  padding: 8px 10px 8px 16px;
+  pointer-events: auto;
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.toast-action-btn {
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.14);
+  color: #a5f3fc;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 900;
+  padding: 5px 11px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+}
+
+.toast-action-btn:active {
+  transform: scale(0.96);
 }

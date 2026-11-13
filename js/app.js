@@ -63,6 +63,8 @@ class ZapfyApp {
     this.skippedStationIds = new Set();
     this.savingsTotal = 0;
     this.fillCount = 0;
+    this.savingsUndoStack = [];
+    this.resetSavingsConfirmTimer = null;
   }
 
   async init() {
@@ -232,6 +234,16 @@ class ZapfyApp {
       btnSavingsBadge.addEventListener('click', () => {
         this.switchTabByIndex(1);
       });
+    }
+
+    const btnUndoLastTanked = document.getElementById('btnUndoLastTanked');
+    if (btnUndoLastTanked) {
+      btnUndoLastTanked.addEventListener('click', () => this.handleUndoSavings());
+    }
+
+    const btnResetSavings = document.getElementById('btnResetSavings');
+    if (btnResetSavings) {
+      btnResetSavings.addEventListener('click', () => this.handleResetSavingsClick());
     }
 
     // Drive-HUD Focus Mode Toggle
@@ -540,7 +552,8 @@ class ZapfyApp {
       lat: this.currentLocation.lat,
       lng: this.currentLocation.lng,
       headingDeg: this.currentLocation.headingDeg,
-      showAll: this.showAllStations
+      showAll: this.showAllStations,
+      skippedIds: this.skippedStationIds
     };
   }
 
@@ -956,60 +969,116 @@ class ZapfyApp {
     }
   }
 
-  getActiveStationsForRanking() {
-    if (!this.skippedStationIds || this.skippedStationIds.size === 0) {
-      return this.stations;
-    }
-    const filtered = this.stations.filter((s) => !this.skippedStationIds.has(s.id));
-    if (filtered.length === 0) {
-      this.skippedStationIds.clear();
-      return this.stations;
-    }
-    return filtered;
+  computeStationSavingGain(st) {
+    if (!st || typeof st.netSavingVsNearest !== 'number') return 0;
+    return Number(Math.max(0, st.netSavingVsNearest).toFixed(2));
   }
 
-  computeStationSavingGain(st, ranking) {
-    if (!st || typeof st.activePrice !== 'number') return 0;
-    const vsMax = ranking && typeof ranking.maxPrice === 'number'
-      ? Math.max(0, (ranking.maxPrice - st.activePrice) * this.config.tankVolume)
-      : 0;
-    const net = typeof st.netSavingVsNearest === 'number' ? Math.max(0, st.netSavingVsNearest) : 0;
-    return Number(Math.max(net, vsMax).toFixed(2));
+  pushSavingsUndoSnapshot() {
+    this.savingsUndoStack.push({
+      prevTotal: this.savingsTotal,
+      prevCount: this.fillCount
+    });
+    if (this.savingsUndoStack.length > 20) {
+      this.savingsUndoStack.shift();
+    }
   }
 
-  async handleMarkTanked(stationId, savingGain) {
-    const gain = Math.max(0, Number(savingGain) || 0);
-    this.savingsTotal = Number((this.savingsTotal + gain).toFixed(2));
-    this.fillCount += 1;
-
+  async persistSavingsState() {
     await Promise.all([
       db.setSetting('savingsTotal', this.savingsTotal),
       db.setSetting('fillCount', this.fillCount)
     ]);
+  }
+
+  clearResetSavingsConfirm() {
+    if (this.resetSavingsConfirmTimer) {
+      clearTimeout(this.resetSavingsConfirmTimer);
+      this.resetSavingsConfirmTimer = null;
+    }
+    const resetBtn = document.getElementById('btnResetSavings');
+    if (resetBtn) {
+      delete resetBtn.dataset.confirming;
+      resetBtn.classList.remove('is-confirming');
+      resetBtn.textContent = 'Zurücksetzen';
+    }
+  }
+
+  async handleMarkTanked(stationId, savingGain) {
+    const gain = Math.max(0, Number(savingGain) || 0);
+    this.pushSavingsUndoSnapshot();
+    this.clearResetSavingsConfirm();
+    this.savingsTotal = Number((this.savingsTotal + gain).toFixed(2));
+    this.fillCount += 1;
+
+    await this.persistSavingsState();
 
     this.renderSavingsBadge({ bump: true });
     this.renderAll();
 
-    if (gain > 0.05) {
-      const gStr = gain.toFixed(2).replace('.', ',');
-      const tStr = this.savingsTotal.toFixed(2).replace('.', ',');
-      this.showToast(`🎉 +${gStr} € gespart! Spar-Topf: ${tStr} €`);
-    } else {
-      this.showToast(`✓ Tankvorgang verbucht (${this.fillCount}×)`);
+    const msg = gain > 0.05
+      ? `🎉 +${gain.toFixed(2).replace('.', ',')} € gespart! Spar-Topf: ${this.savingsTotal.toFixed(2).replace('.', ',')} €`
+      : `✓ Tankvorgang verbucht (${this.fillCount}×)`;
+
+    this.showToast(msg, {
+      actionLabel: 'Rückgängig',
+      durationMs: 5000,
+      onAction: () => this.handleUndoSavings()
+    });
+  }
+
+  async handleUndoSavings() {
+    const snapshot = this.savingsUndoStack.pop();
+    if (!snapshot) return;
+
+    this.clearResetSavingsConfirm();
+    this.savingsTotal = Math.max(0, Number(snapshot.prevTotal) || 0);
+    this.fillCount = Math.max(0, Math.floor(Number(snapshot.prevCount) || 0));
+
+    await this.persistSavingsState();
+    this.renderSavingsBadge({ bump: true });
+    this.renderAll();
+    this.showToast('✓ Letzte Spar-Konto-Änderung rückgängig');
+  }
+
+  async handleResetSavingsClick() {
+    if (this.savingsTotal <= 0 && this.fillCount <= 0) return;
+    const resetBtn = document.getElementById('btnResetSavings');
+    if (!resetBtn) return;
+
+    if (resetBtn.dataset.confirming !== '1') {
+      resetBtn.dataset.confirming = '1';
+      resetBtn.classList.add('is-confirming');
+      resetBtn.textContent = 'Wirklich 0 €?';
+      if (this.resetSavingsConfirmTimer) {
+        clearTimeout(this.resetSavingsConfirmTimer);
+      }
+      this.resetSavingsConfirmTimer = setTimeout(() => {
+        this.clearResetSavingsConfirm();
+      }, 3500);
+      return;
     }
+
+    this.clearResetSavingsConfirm();
+    this.pushSavingsUndoSnapshot();
+    this.savingsTotal = 0;
+    this.fillCount = 0;
+
+    await this.persistSavingsState();
+    this.renderSavingsBadge();
+    this.renderAll();
+    this.showToast('Spar-Konto auf 0,00 € zurückgesetzt', {
+      actionLabel: 'Rückgängig',
+      durationMs: 5000,
+      onAction: () => this.handleUndoSavings()
+    });
   }
 
   handleSkipStation(stationId) {
     if (!stationId) return;
     this.skippedStationIds.add(stationId);
-    const remaining = this.stations.filter((s) => !this.skippedStationIds.has(s.id));
-    if (remaining.length === 0) {
-      this.skippedStationIds.clear();
-      this.showToast('Alle Tankstellen wieder eingeblendet');
-    } else {
-      this.showToast('Nächste Tankstelle ausgewählt');
-    }
-    this.renderAll();
+    const { skipsReset } = this.renderAll();
+    this.showToast(skipsReset ? 'Alle Tankstellen wieder eingeblendet' : 'Nächste Tankstelle ausgewählt');
   }
 
   renderSavingsBadge({ bump = false } = {}) {
@@ -1033,6 +1102,18 @@ class ZapfyApp {
       const avg = this.fillCount > 0 ? this.savingsTotal / this.fillCount : 0;
       statsAvgEl.textContent = `${avg.toFixed(2).replace('.', ',')} €`;
     }
+
+    const canUndo = this.savingsUndoStack.length > 0;
+    const canReset = this.savingsTotal > 0 || this.fillCount > 0;
+    const actionsRow = document.getElementById('savingsActionsRow');
+    const undoBtn = document.getElementById('btnUndoLastTanked');
+    const resetBtn = document.getElementById('btnResetSavings');
+    if (undoBtn) undoBtn.hidden = !canUndo;
+    if (resetBtn) {
+      resetBtn.hidden = !canReset;
+      if (!canReset) this.clearResetSavingsConfirm();
+    }
+    if (actionsRow) actionsRow.hidden = !canUndo && !canReset;
   }
 
   buildDistArrowHtml(st, { size = 13 } = {}) {
@@ -1047,9 +1128,9 @@ class ZapfyApp {
   // --- Rendering ---
 
   renderAll() {
-    const activeStations = this.getActiveStationsForRanking();
-    const ranking = PriceEngine.rankStations(
-      activeStations,
+    let skipsReset = false;
+    let ranking = PriceEngine.rankStations(
+      this.stations,
       this.fuelType,
       this.sortMode,
       this.favoritesSet,
@@ -1058,6 +1139,21 @@ class ZapfyApp {
       this.config.consumption,
       this.getTravelContext()
     );
+
+    if (ranking.list.length === 0 && this.skippedStationIds.size > 0 && ranking.totalRelevantCount > 0) {
+      this.skippedStationIds.clear();
+      skipsReset = true;
+      ranking = PriceEngine.rankStations(
+        this.stations,
+        this.fuelType,
+        this.sortMode,
+        this.favoritesSet,
+        this.radiusKm,
+        this.config.tankVolume,
+        this.config.consumption,
+        this.getTravelContext()
+      );
+    }
 
     const nearbyIds = new Set(this.stations.map((s) => s.id));
     const localSnapshots = nearbyIds.size > 0
@@ -1082,6 +1178,7 @@ class ZapfyApp {
     this.renderStationsList(ranking);
     this.renderDriveHud(ranking);
     this.renderForecastAndStatsTab(ranking, forecast);
+    return { skipsReset };
   }
 
   renderRadarForecastBar(forecast) {
@@ -1109,7 +1206,7 @@ class ZapfyApp {
     const placeStr = st.place || (st.street ? st.street : 'In der Nähe');
     const distHtml = this.buildDistArrowHtml(st, { size: 14 });
     const openStatusHtml = this.formatOpenStatusHtml(st);
-    const savingGain = this.computeStationSavingGain(st, ranking);
+    const savingGain = this.computeStationSavingGain(st);
     const savingStr = savingGain.toFixed(2).replace('.', ',');
 
     let dealBadgeText = '★ Top-Empfehlung';
@@ -1119,7 +1216,7 @@ class ZapfyApp {
     } else if (st.isNearestOpen && st.diffToBestNet <= 0.15) {
       dealBadgeText = '⚡ Nächste · Optimal';
     } else if (savingGain > 0.25) {
-      dealBadgeText = `★ Günstigste · −${savingStr} € vs. Max`;
+      dealBadgeText = `★ Günstigste · −${savingStr} € vs. Nächste`;
     } else if (!isWinner) {
       dealBadgeText = '📍 Nächste Option';
       dealNeutral = true;
@@ -1320,7 +1417,7 @@ class ZapfyApp {
     const distStr = `${hero.dist.toFixed(1).replace('.', ',')} km`;
     const placeStr = hero.place || (hero.street ? hero.street : '');
     const routeText = hero.routeStatus === 'ahead' ? 'Auf Route voraus' : (placeStr || 'Im Korridor');
-    const savingGain = this.computeStationSavingGain(hero, ranking);
+    const savingGain = this.computeStationSavingGain(hero);
     const openStatusHtml = this.formatOpenStatusHtml(hero);
 
     hudEl.innerHTML = `
@@ -1662,16 +1759,39 @@ class ZapfyApp {
     this.showToast('Preis-Statistik zurückgesetzt');
   }
 
-  showToast(message) {
+  showToast(message, { actionLabel = '', onAction = null, durationMs = 2600 } = {}) {
     const container = document.getElementById('toastContainer');
     if (!container) return;
     const el = document.createElement('div');
-    el.className = 'toast-msg';
-    el.textContent = message;
+    const hasAction = Boolean(actionLabel && typeof onAction === 'function');
+    el.className = hasAction ? 'toast-msg has-action' : 'toast-msg';
+
+    const textEl = document.createElement('span');
+    textEl.className = 'toast-text';
+    textEl.textContent = message;
+    el.appendChild(textEl);
+
+    let timerId = null;
+    if (hasAction) {
+      const actionBtn = document.createElement('button');
+      actionBtn.type = 'button';
+      actionBtn.className = 'toast-action-btn';
+      actionBtn.textContent = actionLabel;
+      let handled = false;
+      actionBtn.addEventListener('click', () => {
+        if (handled) return;
+        handled = true;
+        if (timerId) clearTimeout(timerId);
+        el.remove();
+        onAction();
+      });
+      el.appendChild(actionBtn);
+    }
+
     container.appendChild(el);
-    setTimeout(() => {
+    timerId = setTimeout(() => {
       el.remove();
-    }, 2600);
+    }, durationMs);
   }
 
   escapeHtml(str) {
