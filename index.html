@@ -54,6 +54,9 @@
               </button>
             </div>
 
+            <!-- Home Reference Banner (Live comparison vs. user's home station) -->
+            <div class="home-ref-banner" id="homeRefBanner" hidden aria-live="polite"></div>
+
             <!-- Scrollable Station List (1 Dominant Hero + Compact Alternatives) -->
             <div class="stations-scroll-area" id="stationsList" aria-live="polite">
               <!-- Populated dynamically by js/app.js -->
@@ -321,6 +324,29 @@
               </div>
 
             </form>
+
+            <!-- Box 2b: Haus-und-Hof-Tankstelle (Referenz für Unterwegs-Vergleich) -->
+            <div class="setup-card-box" id="homeStationSetupBox">
+              <div class="setup-card-header">
+                <div class="setup-card-title">
+                  <strong>🏠 Haus-und-Hof-Tankstelle</strong>
+                </div>
+                <span class="setup-card-badge" id="homeStationStatusBadge">Nicht gesetzt</span>
+              </div>
+
+              <div class="home-current-card" id="homeStationCurrentCard" hidden></div>
+
+              <div class="setting-field">
+                <label class="setting-field-label" for="homeStationSearchInput">Tankstelle per PLZ oder Ort suchen (auch aus der Ferne)</label>
+                <div class="home-search-row">
+                  <input type="text" class="setting-input" id="homeStationSearchInput" placeholder="z. B. 80331 München oder Musterstraße" autocomplete="off">
+                  <button type="button" class="btn-home-search" id="btnSearchHomeStation">Suchen</button>
+                </div>
+              </div>
+
+              <div class="home-search-results" id="homeStationSearchResults" hidden></div>
+              <div class="home-local-suggestions" id="homeStationLocalSuggestions" hidden></div>
+            </div>
 
             <!-- Box 3: ℹ️ Live Cockpit Status -->
             <div class="setup-status-grid">

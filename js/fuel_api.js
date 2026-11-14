@@ -7,15 +7,18 @@
 
 const TANKERKOENIG_BASE_URL = 'https://creativecommons.tankerkoenig.de/json/list.php';
 const TANKERKOENIG_DETAIL_URL = 'https://creativecommons.tankerkoenig.de/json/detail.php';
+const TANKERKOENIG_PRICES_URL = 'https://creativecommons.tankerkoenig.de/json/prices.php';
 
 // Persistent Token-Bucket & Spatial-Temporal Cache Constants (Protects Tankerkönig API across app restarts)
 const STORAGE_KEY_BUCKET = 'zapfy_tk_token_bucket_v1';
 const STORAGE_KEY_API_CACHE = 'zapfy_tk_last_response_v1';
+const STORAGE_KEY_HOME_PRICE_CACHE = 'zapfy_tk_home_price_v1';
 const STORAGE_KEY_GPS_TRAIL = 'zapfy_gps_breadcrumbs_v1';
 
 const BUCKET_CAPACITY = 4;               // Max burst tokens
 const BUCKET_REFILL_MS = 5 * 60 * 1000;  // 1 new token every 5 minutes (recommended Tankerkönig interval)
 const CACHE_FRESH_TTL_MS = 4 * 60 * 1000; // 4 minutes: serve cached response on repeated app open/close if within 400m
+const HOME_PRICE_TTL_MS = 5 * 60 * 1000; // 5 minutes cache for remote home station price checks
 const COOLDOWN_503_MS = 10 * 60 * 1000;  // 10 minutes strict pause if server ever returns HTTP 503 Rate Limit Exceeded
 const GPS_TRAIL_MAX_AGE_MS = 20 * 60 * 1000; // 20 minutes macro-route trail window
 
@@ -842,5 +845,197 @@ export class FuelApiService {
     }
 
     return records;
+  }
+
+  /**
+   * Fetches current prices for up to 10 station IDs in a single Tankerkönig `prices.php` call,
+   * regardless of the user's current GPS distance. Uses a 5-minute localStorage cache.
+   */
+  static async fetchStationPrices({ stationIds = [], apiKey = '', demoMode = false } = {}) {
+    const ids = (Array.isArray(stationIds) ? stationIds : [stationIds])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+      .slice(0, 10);
+
+    if (ids.length === 0) {
+      return { ok: true, source: 'none', cached: false, fetchedAt: Date.now(), prices: {} };
+    }
+
+    const cleanKey = (apiKey || '').trim();
+    const hasOnlySimIds = ids.every((id) => id.startsWith('sim-'));
+    const useSimulation = demoMode || !cleanKey || hasOnlySimIds;
+
+    if (useSimulation) {
+      const now = new Date();
+      const hourOffset = this.getTypicalHourlyOffset(now.getHours());
+      const roundPrice = (v) => Math.round(v * 1000) / 1000;
+      const prices = {};
+      for (const id of ids) {
+        let hash = 0;
+        for (let i = 0; i < id.length; i += 1) {
+          hash = ((hash << 5) - hash) + id.charCodeAt(i);
+          hash |= 0;
+        }
+        const delta = ((Math.abs(hash) % 9) - 4) * 0.01;
+        prices[id] = {
+          status: 'open',
+          e10: roundPrice(1.699 + delta + hourOffset),
+          e5: roundPrice(1.759 + delta + hourOffset),
+          diesel: roundPrice(1.619 + delta + hourOffset)
+        };
+      }
+      return { ok: true, source: 'demo', cached: false, fetchedAt: Date.now(), prices };
+    }
+
+    const cacheKey = ids.join(',');
+    let cachedEntry = null;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_HOME_PRICE_CACHE);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.cacheKey === cacheKey && parsed.prices) {
+          cachedEntry = parsed;
+          if (Date.now() - parsed.fetchedAt <= HOME_PRICE_TTL_MS) {
+            return {
+              ok: true,
+              source: 'live',
+              cached: true,
+              fetchedAt: parsed.fetchedAt,
+              prices: parsed.prices
+            };
+          }
+        }
+      }
+    } catch {
+      // Ignore storage errors
+    }
+
+    const bucketCheck = this.checkAndConsumeToken();
+    if (!bucketCheck.allowed) {
+      if (cachedEntry) {
+        return {
+          ok: true,
+          source: 'live',
+          cached: true,
+          rateLimited: true,
+          fetchedAt: cachedEntry.fetchedAt,
+          prices: cachedEntry.prices
+        };
+      }
+      throw new Error(`Rate-Limit-Schutz aktiv (bitte ${bucketCheck.waitSec}s warten).`);
+    }
+
+    const url = new URL(TANKERKOENIG_PRICES_URL);
+    url.searchParams.set('ids', cacheKey);
+    url.searchParams.set('apikey', cleanKey);
+
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' }
+    });
+
+    if (response.status === 503) {
+      this.registerServerRateLimit503();
+      if (cachedEntry) {
+        return {
+          ok: true,
+          source: 'live',
+          cached: true,
+          rateLimited: true,
+          fetchedAt: cachedEntry.fetchedAt,
+          prices: cachedEntry.prices
+        };
+      }
+      throw new Error('Tankerkönig Rate-Limit erreicht (HTTP 503).');
+    }
+
+    if (!response.ok) {
+      throw new Error(`Preisabruf fehlgeschlagen (HTTP ${response.status})`);
+    }
+
+    const data = await response.json();
+    if (!data.ok || !data.prices) {
+      throw new Error(data.message || 'Stationspreise konnten nicht geladen werden.');
+    }
+
+    const fetchedAt = Date.now();
+    try {
+      localStorage.setItem(
+        STORAGE_KEY_HOME_PRICE_CACHE,
+        JSON.stringify({ cacheKey, fetchedAt, prices: data.prices })
+      );
+    } catch {
+      // Ignore storage quota errors
+    }
+
+    return { ok: true, source: 'live', cached: false, fetchedAt, prices: data.prices };
+  }
+
+  /**
+   * Geocodes a German postal code, city, or street address via OpenStreetMap Nominatim.
+   */
+  static async geocodePlace(query) {
+    const clean = String(query || '').trim();
+    if (!clean) {
+      throw new Error('Bitte PLZ, Ort oder Straße eingeben.');
+    }
+
+    const url = new URL('https://nominatim.openstreetmap.org/search');
+    url.searchParams.set('format', 'jsonv2');
+    url.searchParams.set('countrycodes', 'de');
+    url.searchParams.set('limit', '5');
+    url.searchParams.set('q', clean);
+
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'Accept-Language': 'de'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ortssuche fehlgeschlagen (HTTP ${response.status})`);
+    }
+
+    const results = await response.json();
+    if (!Array.isArray(results) || results.length === 0) {
+      return [];
+    }
+
+    return results.map((item) => ({
+      displayName: item.display_name || clean,
+      lat: Number(item.lat),
+      lng: Number(item.lon)
+    })).filter((item) => Number.isFinite(item.lat) && Number.isFinite(item.lng));
+  }
+
+  /**
+   * Searches gas stations around any German postal code / city / address for remote home-station selection.
+   */
+  static async searchStationsByPlace({ query, apiKey = '', demoMode = false } = {}) {
+    const places = await this.geocodePlace(query);
+    if (places.length === 0) {
+      throw new Error('Ort oder PLZ nicht gefunden. Bitte genauer angeben.');
+    }
+
+    const topPlace = places[0];
+    const shortLabel = topPlace.displayName.split(',').slice(0, 2).join(',').trim();
+
+    const res = await this.fetchStations({
+      lat: topPlace.lat,
+      lng: topPlace.lng,
+      radiusKm: 10,
+      apiKey,
+      demoMode
+    });
+
+    return {
+      placeLabel: shortLabel || query,
+      lat: topPlace.lat,
+      lng: topPlace.lng,
+      source: res.source,
+      stations: res.stations || []
+    };
   }
 }

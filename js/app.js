@@ -65,6 +65,13 @@ class ZapfyApp {
     this.fillCount = 0;
     this.savingsUndoStack = [];
     this.resetSavingsConfirmTimer = null;
+
+    // Home ("Haus-und-Hof") Reference Station State
+    this.homeStation = null;
+    this.homeStationPrice = null;
+    this.homeSearchResults = [];
+    this.homeSearchPlaceLabel = '';
+    this.homeSearchFilter = '';
   }
 
   async init() {
@@ -91,7 +98,7 @@ class ZapfyApp {
   async loadSettingsAndData() {
     const [
       apiKey, demoMode, tankVolume, consumption, defaultFuel, fallbackRegion, sortMode,
-      themeMode, savingsTotal, fillCount, favorites, snapshots, detailsMap
+      themeMode, savingsTotal, fillCount, homeStation, favorites, snapshots, detailsMap
     ] = await Promise.all([
       db.getSetting('apiKey', ''),
       db.getSetting('demoMode', false),
@@ -103,6 +110,7 @@ class ZapfyApp {
       db.getSetting('themeMode', 'auto'),
       db.getSetting('savingsTotal', 0),
       db.getSetting('fillCount', 0),
+      db.getSetting('homeStation', null),
       db.getFavorites(),
       db.getAllSnapshots(),
       db.getAllStationDetailsMap()
@@ -131,6 +139,7 @@ class ZapfyApp {
     }
 
     this.favoritesSet = new Set((favorites || []).map((f) => f.id));
+    this.homeStation = homeStation && homeStation.id ? homeStation : null;
     this.stationDetailsMap = detailsMap || new Map();
     // Auto-migrate legacy cached records that missed openingLabel
     for (const [id, item] of this.stationDetailsMap.entries()) {
@@ -319,6 +328,19 @@ class ZapfyApp {
           this.renderAll();
           return;
         }
+        const homeToggleBtn = e.target.closest('.btn-home-toggle');
+        if (homeToggleBtn) {
+          const stId = homeToggleBtn.getAttribute('data-station-id');
+          if (stId) {
+            if (this.homeStation && this.homeStation.id === stId) {
+              await this.clearHomeStation();
+            } else {
+              const st = this.stations.find((s) => s.id === stId);
+              if (st) await this.setHomeStation(st);
+            }
+          }
+          return;
+        }
         // Ignore clicks on Google Maps buttons so navigation opens immediately
         if (e.target.closest('a, button')) return;
         const cardEl = e.target.closest('[data-station-id]');
@@ -430,6 +452,52 @@ class ZapfyApp {
     const btnUseCurrentGps = document.getElementById('btnUseCurrentGps');
     if (btnUseCurrentGps) {
       btnUseCurrentGps.addEventListener('click', () => this.handleUseCurrentGpsAsFallback());
+    }
+
+    // Home Reference Banner -> Jump to Setup Tab
+    const homeRefBanner = document.getElementById('homeRefBanner');
+    if (homeRefBanner) {
+      homeRefBanner.addEventListener('click', () => this.switchTabByIndex(2));
+    }
+
+    // Home Station Setup Box (Search by PLZ/City, Filter, Pick, Clear)
+    const btnSearchHome = document.getElementById('btnSearchHomeStation');
+    if (btnSearchHome) {
+      btnSearchHome.addEventListener('click', () => this.handleSearchHomeStation());
+    }
+    const homeSearchInput = document.getElementById('homeStationSearchInput');
+    if (homeSearchInput) {
+      homeSearchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          this.handleSearchHomeStation();
+        }
+      });
+    }
+    const homeSetupBox = document.getElementById('homeStationSetupBox');
+    if (homeSetupBox) {
+      homeSetupBox.addEventListener('click', async (e) => {
+        const clearBtn = e.target.closest('#btnClearHomeStation');
+        if (clearBtn) {
+          await this.clearHomeStation();
+          return;
+        }
+        const pickBtn = e.target.closest('.btn-pick-home-station');
+        if (pickBtn) {
+          const stId = pickBtn.getAttribute('data-station-id');
+          const sourceList = [...(this.homeSearchResults || []), ...this.getKnownLocalStations(), ...(this.stations || [])];
+          const found = sourceList.find((s) => s.id === stId);
+          if (found) {
+            await this.setHomeStation(found);
+          }
+        }
+      });
+      homeSetupBox.addEventListener('input', (e) => {
+        if (e.target && e.target.id === 'homeResultFilterInput') {
+          this.homeSearchFilter = e.target.value || '';
+          this.renderHomeSearchResults();
+        }
+      });
     }
 
     // Export, Backup, Restore & Reset Buttons
@@ -574,6 +642,9 @@ class ZapfyApp {
 
       this.stations = res.stations || [];
       this.dataSource = res.source;
+
+      // Refresh remote home station price in parallel (uses nearby station directly if in range)
+      await this.refreshHomeStationPrice({ silent: true });
 
       // Anchor last fetch location & timestamp for smart drive-mode triggering
       this.lastFetchLocation = {
@@ -1175,9 +1246,11 @@ class ZapfyApp {
 
     this.renderRadarForecastBar(forecast);
     this.renderSavingsBadge();
+    this.renderHomeRefBanner();
     this.renderStationsList(ranking);
     this.renderDriveHud(ranking);
     this.renderForecastAndStatsTab(ranking, forecast);
+    this.renderHomeStationSetup();
     return { skipsReset };
   }
 
@@ -1198,6 +1271,51 @@ class ZapfyApp {
     } else {
       metaEl.textContent = `18–20h ›`;
     }
+  }
+
+  getHomeComparison(st) {
+    if (!this.homeStation || !this.homeStationPrice || !st) return null;
+    if (st.id === this.homeStation.id) {
+      return { isSelf: true };
+    }
+    const homePrice = Number(this.homeStationPrice[this.fuelType]);
+    if (!Number.isFinite(homePrice) || homePrice <= 0 || !Number.isFinite(st.activePrice)) {
+      return null;
+    }
+    const deltaEur = st.activePrice - homePrice;
+    const deltaCents = deltaEur * 100;
+    const tankDiffEur = deltaEur * this.config.tankVolume;
+    return {
+      isSelf: false,
+      homePrice,
+      deltaEur,
+      deltaCents,
+      tankDiffEur,
+      isCheaper: deltaEur <= -0.005,
+      isPricier: deltaEur >= 0.005
+    };
+  }
+
+  buildHomeDeltaBadgeHtml(st, { compact = false } = {}) {
+    const cmp = this.getHomeComparison(st);
+    if (!cmp) return '';
+    if (cmp.isSelf) {
+      return '<span class="home-delta-badge is-home">🏠 Stamm-Tanke</span>';
+    }
+
+    const absCents = Math.abs(cmp.deltaCents);
+    const centsStr = compact ? absCents.toFixed(0) : absCents.toFixed(1).replace('.', ',');
+    const absTankStr = Math.abs(cmp.tankDiffEur).toFixed(2).replace('.', ',');
+
+    if (cmp.isCheaper) {
+      return `<span class="home-delta-badge is-cheaper" title="Günstiger als deine Haus-und-Hof-Tankstelle">🏠 −${centsStr} ct (−${absTankStr} €)</span>`;
+    }
+    if (cmp.isPricier) {
+      return compact
+        ? `<span class="home-delta-badge is-pricier">🏠 +${centsStr} ct</span>`
+        : `<span class="home-delta-badge is-pricier">🏠 +${centsStr} ct vs. daheim</span>`;
+    }
+    return '<span class="home-delta-badge is-equal">🏠 = daheim</span>';
   }
 
   buildHeroStationHtml(st, ranking, isWinner) {
@@ -1235,6 +1353,8 @@ class ZapfyApp {
     const tankedLabel = savingGain > 0.05
       ? `✓ Hier getankt (+${savingStr} €)`
       : '✓ Hier getankt';
+    const isHomeSt = Boolean(this.homeStation && this.homeStation.id === st.id);
+    const homeDeltaHtml = this.buildHomeDeltaBadgeHtml(st, { compact: false });
 
     return `
       <article class="station-card is-hero ${isWinner ? 'is-winner' : ''} ${!st.isOpen ? 'is-closed' : ''}" data-station-id="${this.escapeHtml(st.id)}" title="Antippen, um genaue Schließzeit zu prüfen">
@@ -1252,6 +1372,7 @@ class ZapfyApp {
               <span class="station-place">${this.escapeHtml(FUEL_LABELS[this.fuelType] || 'Kraftstoff')}</span>
             </div>
             <div class="station-line-status">${statusLineHtml}</div>
+            ${homeDeltaHtml ? `<div class="hero-home-delta-row">${homeDeltaHtml}</div>` : ''}
           </div>
 
           <div class="station-price-box">
@@ -1270,6 +1391,10 @@ class ZapfyApp {
             </svg>
             <span>Route starten</span>
           </a>
+
+          <button type="button" class="btn-home-toggle ${isHomeSt ? 'is-active' : ''}" data-station-id="${this.escapeHtml(st.id)}" title="${isHomeSt ? 'Als Haus-und-Hof-Tankstelle entfernen' : 'Als Haus-und-Hof-Tankstelle festlegen'}" aria-label="Als Stamm-Tankstelle festlegen">
+            🏠
+          </button>
 
           <a href="${gmaps.mapViewUrl}" target="_blank" rel="noopener noreferrer" class="btn-gmaps-pin" title="Pin auf Google Maps Karte zeigen" aria-label="Pin auf Karte zeigen">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
@@ -1307,6 +1432,9 @@ class ZapfyApp {
       deltaHtml = `<span class="meta-extra-cost">+${extraTank} €</span>`;
     }
 
+    const isHomeSt = Boolean(this.homeStation && this.homeStation.id === st.id);
+    const homeDeltaHtml = this.buildHomeDeltaBadgeHtml(st, { compact: true });
+
     const metaHtml = [
       `<span>${distStr}</span>`,
       openStatusHtml,
@@ -1326,6 +1454,7 @@ class ZapfyApp {
         <div class="alt-info">
           <div class="alt-brand-row">
             <span class="alt-brand">${this.escapeHtml(st.brand || st.name)}</span>
+            ${homeDeltaHtml}
           </div>
           <div class="alt-meta">${metaHtml}</div>
         </div>
@@ -1335,6 +1464,7 @@ class ZapfyApp {
             <span>${priceFmt.main}</span>
             <span class="alt-price-tenths">${priceFmt.tenths}</span>
           </div>
+          <button type="button" class="btn-home-toggle is-compact ${isHomeSt ? 'is-active' : ''}" data-station-id="${this.escapeHtml(st.id)}" title="${isHomeSt ? 'Stamm-Tankstelle entfernen' : 'Als Stamm-Tankstelle festlegen'}" aria-label="Stamm-Tankstelle festlegen">🏠</button>
           <a href="${gmaps.navigateUrl}" target="_blank" rel="noopener noreferrer" class="btn-alt-route" title="Route zu ${this.escapeHtml(st.brand || st.name)} starten" aria-label="Route starten">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
               <polygon points="3 11 22 2 13 21 11 13 3 11"></polygon>
@@ -1443,6 +1573,7 @@ class ZapfyApp {
             <span class="hud-price-unit">€</span>
           </div>
 
+          ${this.buildHomeDeltaBadgeHtml(hero, { compact: false })}
           ${savingGain > 0.25 ? `<div class="hud-saving-tag">💰 −${savingGain.toFixed(2).replace('.', ',')} € Ersparnis (${this.config.tankVolume}L)</div>` : ''}
         </div>
 
@@ -1792,6 +1923,287 @@ class ZapfyApp {
     timerId = setTimeout(() => {
       el.remove();
     }, durationMs);
+  }
+
+  // --- Home ("Haus-und-Hof") Reference Station ---
+
+  async refreshHomeStationPrice({ silent = true } = {}) {
+    if (!this.homeStation || !this.homeStation.id) {
+      this.homeStationPrice = null;
+      return;
+    }
+
+    const inNearby = (this.stations || []).find((s) => s.id === this.homeStation.id);
+    if (inNearby) {
+      this.homeStationPrice = {
+        status: inNearby.isOpen ? 'open' : 'closed',
+        e10: inNearby.e10,
+        e5: inNearby.e5,
+        diesel: inNearby.diesel,
+        fetchedAt: Date.now(),
+        source: this.dataSource
+      };
+      return;
+    }
+
+    try {
+      const res = await FuelApiService.fetchStationPrices({
+        stationIds: [this.homeStation.id],
+        apiKey: this.config.apiKey,
+        demoMode: this.config.demoMode
+      });
+      const entry = res.prices && res.prices[this.homeStation.id];
+      if (entry) {
+        this.homeStationPrice = {
+          status: entry.status || 'open',
+          e10: typeof entry.e10 === 'number' ? entry.e10 : null,
+          e5: typeof entry.e5 === 'number' ? entry.e5 : null,
+          diesel: typeof entry.diesel === 'number' ? entry.diesel : null,
+          fetchedAt: res.fetchedAt || Date.now(),
+          source: res.source
+        };
+      }
+    } catch (err) {
+      if (!silent) {
+        this.showToast(`Stamm-Tankstelle Preisabruf: ${err.message}`);
+      }
+    }
+  }
+
+  async setHomeStation(stationObj) {
+    if (!stationObj || !stationObj.id) return;
+    const cleanHome = {
+      id: stationObj.id,
+      name: stationObj.name || stationObj.brand || 'Stamm-Tankstelle',
+      brand: stationObj.brand || stationObj.name || '',
+      street: stationObj.street || '',
+      houseNumber: stationObj.houseNumber || '',
+      postCode: stationObj.postCode || '',
+      place: stationObj.place || '',
+      lat: Number(stationObj.lat) || null,
+      lng: Number(stationObj.lng) || null,
+      set_at: new Date().toISOString()
+    };
+
+    this.homeStation = cleanHome;
+    await db.setSetting('homeStation', cleanHome);
+    await this.refreshHomeStationPrice({ silent: true });
+    this.renderAll();
+    this.showToast(`🏠 Stamm-Tankstelle gesetzt: ${cleanHome.brand || cleanHome.name}`);
+  }
+
+  async clearHomeStation() {
+    this.homeStation = null;
+    this.homeStationPrice = null;
+    await db.setSetting('homeStation', null);
+    this.renderAll();
+    this.showToast('Haus-und-Hof-Tankstelle entfernt');
+  }
+
+  getKnownLocalStations() {
+    const byId = new Map();
+    for (const st of this.stations || []) {
+      if (st && st.id && !byId.has(st.id)) {
+        byId.set(st.id, st);
+      }
+    }
+    for (let i = (this.snapshots || []).length - 1; i >= 0; i -= 1) {
+      const snap = this.snapshots[i];
+      if (!snap || !snap.station_id || byId.has(snap.station_id)) continue;
+      byId.set(snap.station_id, {
+        id: snap.station_id,
+        name: snap.station_name || 'Tankstelle',
+        brand: snap.station_name || '',
+        street: snap.street || '',
+        houseNumber: snap.houseNumber || '',
+        place: snap.place || '',
+        lat: snap.lat || null,
+        lng: snap.lng || null
+      });
+      if (byId.size >= 12) break;
+    }
+    return Array.from(byId.values());
+  }
+
+  renderHomeRefBanner() {
+    const bannerEl = document.getElementById('homeRefBanner');
+    if (!bannerEl) return;
+
+    if (!this.homeStation) {
+      bannerEl.hidden = true;
+      bannerEl.innerHTML = '';
+      return;
+    }
+
+    const label = this.homeStation.brand || this.homeStation.name;
+    const placeStr = this.homeStation.place ? ` (${this.homeStation.place})` : '';
+    const priceVal = this.homeStationPrice ? Number(this.homeStationPrice[this.fuelType]) : NaN;
+    const isClosed = this.homeStationPrice && this.homeStationPrice.status === 'closed';
+
+    let priceHtml = '<span class="home-ref-price-muted">wird geladen…</span>';
+    if (isClosed) {
+      priceHtml = '<span class="home-ref-price-muted">aktuell geschlossen</span>';
+    } else if (Number.isFinite(priceVal) && priceVal > 0) {
+      const fmt = PriceEngine.formatPriceParts(priceVal);
+      const timeStr = this.homeStationPrice?.fetchedAt
+        ? new Date(this.homeStationPrice.fetchedAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
+        : '';
+      priceHtml = `<strong class="home-ref-price">${fmt.main}<sup>${fmt.tenths}</sup> €</strong>${timeStr ? ` <span class="home-ref-time">· ${timeStr}</span>` : ''}`;
+    }
+
+    bannerEl.hidden = false;
+    bannerEl.innerHTML = `
+      <div class="home-ref-left">
+        <span class="home-ref-icon" aria-hidden="true">🏠</span>
+        <span class="home-ref-name">Daheim: <strong>${this.escapeHtml(label)}</strong>${this.escapeHtml(placeStr)}</span>
+      </div>
+      <div class="home-ref-right">
+        ${priceHtml}
+      </div>
+    `;
+  }
+
+  renderHomeStationSetup() {
+    const badgeEl = document.getElementById('homeStationStatusBadge');
+    const currentEl = document.getElementById('homeStationCurrentCard');
+    const localEl = document.getElementById('homeStationLocalSuggestions');
+
+    if (badgeEl) {
+      badgeEl.textContent = this.homeStation ? 'Aktiv' : 'Nicht gesetzt';
+      badgeEl.className = `setup-card-badge ${this.homeStation ? 'status-live' : ''}`;
+    }
+
+    if (currentEl) {
+      if (!this.homeStation) {
+        currentEl.hidden = true;
+        currentEl.innerHTML = '';
+      } else {
+        const addr = [
+          [this.homeStation.street, this.homeStation.houseNumber].filter(Boolean).join(' '),
+          [this.homeStation.postCode, this.homeStation.place].filter(Boolean).join(' ')
+        ].filter(Boolean).join(', ');
+        const priceVal = this.homeStationPrice ? Number(this.homeStationPrice[this.fuelType]) : NaN;
+        const priceStr = Number.isFinite(priceVal) && priceVal > 0
+          ? `${PriceEngine.formatPriceParts(priceVal).main}${PriceEngine.formatPriceParts(priceVal).tenths} €`
+          : '';
+
+        currentEl.hidden = false;
+        currentEl.innerHTML = `
+          <div class="home-current-info">
+            <div class="home-current-title">🏠 ${this.escapeHtml(this.homeStation.brand || this.homeStation.name)} ${priceStr ? `<span class="home-current-price">${priceStr}</span>` : ''}</div>
+            <div class="home-current-addr">${this.escapeHtml(addr || 'Gespeicherte Stamm-Tankstelle')}</div>
+          </div>
+          <button type="button" class="btn-home-clear" id="btnClearHomeStation" title="Stamm-Tankstelle entfernen">Entfernen</button>
+        `;
+      }
+    }
+
+    if (localEl) {
+      const known = this.getKnownLocalStations().filter((s) => !this.homeStation || s.id !== this.homeStation.id);
+      if (known.length === 0) {
+        localEl.hidden = true;
+        localEl.innerHTML = '';
+      } else {
+        localEl.hidden = false;
+        const chips = known.slice(0, 6).map((s) => {
+          const title = s.brand || s.name;
+          const place = s.place ? ` · ${s.place}` : '';
+          return `<button type="button" class="home-suggestion-chip btn-pick-home-station" data-station-id="${this.escapeHtml(s.id)}">🏠 ${this.escapeHtml(title)}${this.escapeHtml(place)}</button>`;
+        }).join('');
+        localEl.innerHTML = `
+          <div class="home-suggestions-label">Schnellwahl aus deinen letzten Stationen:</div>
+          <div class="home-suggestions-wrap">${chips}</div>
+        `;
+      }
+    }
+
+    this.renderHomeSearchResults();
+  }
+
+  renderHomeSearchResults() {
+    const resultsEl = document.getElementById('homeStationSearchResults');
+    if (!resultsEl) return;
+
+    if (!this.homeSearchResults || this.homeSearchResults.length === 0) {
+      resultsEl.hidden = true;
+      resultsEl.innerHTML = '';
+      return;
+    }
+
+    const filterText = (this.homeSearchFilter || '').trim().toLowerCase();
+    const filtered = filterText
+      ? this.homeSearchResults.filter((s) => {
+          const hay = `${s.brand || ''} ${s.name || ''} ${s.street || ''} ${s.place || ''}`.toLowerCase();
+          return hay.includes(filterText);
+        })
+      : this.homeSearchResults;
+
+    const listHtml = filtered.slice(0, 12).map((s) => {
+      const isCurrent = this.homeStation && this.homeStation.id === s.id;
+      const addr = [
+        [s.street, s.houseNumber].filter(Boolean).join(' '),
+        [s.postCode, s.place].filter(Boolean).join(' ')
+      ].filter(Boolean).join(', ');
+      return `
+        <div class="home-search-item ${isCurrent ? 'is-selected' : ''}">
+          <div class="home-search-item-info">
+            <strong>${this.escapeHtml(s.brand || s.name)}</strong>
+            <span>${this.escapeHtml(addr || 'Adresse unbekannt')}</span>
+          </div>
+          <button type="button" class="btn-pick-home-station ${isCurrent ? 'is-selected' : ''}" data-station-id="${this.escapeHtml(s.id)}">
+            ${isCurrent ? '✓ Aktiv' : 'Festlegen'}
+          </button>
+        </div>
+      `;
+    }).join('');
+
+    resultsEl.hidden = false;
+    resultsEl.innerHTML = `
+      <div class="home-search-meta">
+        <span>Gefunden bei <strong>${this.escapeHtml(this.homeSearchPlaceLabel)}</strong> (${filtered.length})</span>
+      </div>
+      <input type="text" class="setting-input home-filter-input" id="homeResultFilterInput" placeholder="Ergebnisse filtern (z. B. JET, Aral, Straße)…" value="${this.escapeHtml(this.homeSearchFilter)}">
+      <div class="home-search-list">
+        ${listHtml || '<div class="home-search-empty">Keine Tankstelle passt zum Filter.</div>'}
+      </div>
+    `;
+  }
+
+  async handleSearchHomeStation() {
+    const inputEl = document.getElementById('homeStationSearchInput');
+    const btnEl = document.getElementById('btnSearchHomeStation');
+    const query = (inputEl?.value || '').trim();
+    if (!query) {
+      this.showToast('Bitte PLZ, Ort oder Straße eingeben.');
+      return;
+    }
+
+    if (btnEl) {
+      btnEl.disabled = true;
+      btnEl.textContent = 'Suche…';
+    }
+
+    try {
+      const res = await FuelApiService.searchStationsByPlace({
+        query,
+        apiKey: this.config.apiKey,
+        demoMode: this.config.demoMode
+      });
+      this.homeSearchResults = res.stations || [];
+      this.homeSearchPlaceLabel = res.placeLabel || query;
+      this.homeSearchFilter = '';
+      this.renderHomeSearchResults();
+      if (this.homeSearchResults.length === 0) {
+        this.showToast('Keine Tankstellen in diesem Umkreis gefunden.');
+      }
+    } catch (err) {
+      this.showToast(`Suche fehlgeschlagen: ${err.message}`);
+    } finally {
+      if (btnEl) {
+        btnEl.disabled = false;
+        btnEl.textContent = 'Suchen';
+      }
+    }
   }
 
   escapeHtml(str) {

@@ -39,3 +39,4 @@ Benutzereinstellungen (Hinweis: `apiKey` wird bei JSON-Backups aus Datenschutzgr
 - `themeMode`: Cockpit-Farbschema (`"auto"`, `"dark"`, `"light"`)
 - `savingsTotal`: Kumulierte bestätigte Ersparnis in Euro (z. B. `28.40`)
 - `fillCount`: Anzahl verbuchter Tankvorgänge (`✓ Hier getankt`)
+- `homeStation`: Gespeicherte Haus-und-Hof-Tankstelle für den Unterwegs-Vergleich (`{ id, name, brand, street, houseNumber, postCode, place, lat, lng, set_at }` oder `null`)

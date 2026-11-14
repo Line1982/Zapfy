@@ -2432,3 +2432,365 @@ html, body {
 .toast-action-btn:active {
   transform: scale(0.96);
 }
+
+/* ==========================================================================
+   Home ("Haus-und-Hof") Reference Station & Comparison UI
+   ========================================================================== */
+
+.home-ref-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 12px;
+  margin-bottom: 8px;
+  border-radius: 13px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-card-sm);
+  font-size: 0.78rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.home-ref-banner[hidden] {
+  display: none;
+}
+
+.home-ref-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-secondary);
+}
+
+.home-ref-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.home-ref-name strong {
+  color: var(--text-main);
+}
+
+.home-ref-right {
+  flex-shrink: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+}
+
+.home-ref-price {
+  font-size: 0.88rem;
+  font-weight: 900;
+  color: var(--text-main);
+}
+
+.home-ref-price sup {
+  font-size: 0.66rem;
+}
+
+.home-ref-time,
+.home-ref-price-muted {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.hero-home-delta-row {
+  margin-top: 5px;
+}
+
+.home-delta-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.home-delta-badge.is-cheaper {
+  background: rgba(16, 185, 129, 0.14);
+  color: var(--emerald-dark);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.home-delta-badge.is-pricier {
+  background: rgba(245, 158, 11, 0.13);
+  color: #b45309;
+  border: 1px solid rgba(245, 158, 11, 0.28);
+}
+
+.home-delta-badge.is-equal {
+  background: var(--bg-well);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+}
+
+.home-delta-badge.is-home {
+  background: rgba(59, 130, 246, 0.14);
+  color: var(--primary);
+  border: 1px solid rgba(59, 130, 246, 0.32);
+}
+
+html.theme-dark .home-delta-badge.is-cheaper {
+  color: #34d399;
+}
+
+html.theme-dark .home-delta-badge.is-pricier {
+  color: #fbbf24;
+}
+
+.btn-home-toggle {
+  height: 44px;
+  min-width: 44px;
+  padding: 0 10px;
+  border-radius: 13px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-well);
+  font-size: 1.05rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.72;
+  transition: transform 0.12s ease, opacity 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.btn-home-toggle.is-compact {
+  height: 36px;
+  min-width: 36px;
+  padding: 0 6px;
+  border-radius: 10px;
+  font-size: 0.92rem;
+}
+
+.btn-home-toggle.is-active {
+  opacity: 1;
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.45);
+}
+
+.btn-home-toggle:active {
+  transform: scale(0.94);
+}
+
+/* Setup Tab: Home Station Selector */
+.home-current-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border-radius: 12px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.home-current-card[hidden] {
+  display: none;
+}
+
+.home-current-info {
+  min-width: 0;
+}
+
+.home-current-title {
+  font-size: 0.88rem;
+  font-weight: 800;
+  color: var(--text-main);
+}
+
+.home-current-price {
+  margin-left: 6px;
+  font-weight: 900;
+  color: var(--emerald-dark);
+}
+
+html.theme-dark .home-current-price {
+  color: #34d399;
+}
+
+.home-current-addr {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.btn-home-clear {
+  flex-shrink: 0;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--rose);
+  font-family: inherit;
+  font-size: 0.74rem;
+  font-weight: 800;
+  padding: 6px 10px;
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.home-search-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.home-search-row .setting-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.btn-home-search {
+  flex-shrink: 0;
+  padding: 0 14px;
+  border: none;
+  border-radius: 12px;
+  background: var(--primary);
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.btn-home-search:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.home-search-results {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.home-search-results[hidden] {
+  display: none;
+}
+
+.home-search-meta {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+}
+
+.home-filter-input {
+  padding: 8px 11px !important;
+  font-size: 0.82rem !important;
+}
+
+.home-search-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.home-search-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--bg-well);
+  border: 1px solid var(--border-subtle);
+}
+
+.home-search-item.is-selected {
+  border-color: rgba(16, 185, 129, 0.45);
+}
+
+.home-search-item-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.home-search-item-info strong {
+  font-size: 0.82rem;
+  color: var(--text-main);
+}
+
+.home-search-item-info span {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.btn-pick-home-station {
+  flex-shrink: 0;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--primary);
+  font-family: inherit;
+  font-size: 0.74rem;
+  font-weight: 800;
+  padding: 6px 10px;
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.btn-pick-home-station.is-selected {
+  background: rgba(16, 185, 129, 0.14);
+  color: var(--emerald-dark);
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+.home-search-empty {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  padding: 8px 0;
+}
+
+.home-local-suggestions {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-subtle);
+}
+
+.home-local-suggestions[hidden] {
+  display: none;
+}
+
+.home-suggestions-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.home-suggestions-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.home-suggestion-chip {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-well);
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: 0.74rem;
+  font-weight: 700;
+  padding: 5px 9px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+}
+
+.home-suggestion-chip:active {
+  transform: scale(0.96);
+}
