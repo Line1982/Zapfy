@@ -524,6 +524,77 @@ export class FuelApiService {
   }
 
   /**
+   * Fetches stations around an arbitrary corridor point (used by RouteService)
+   * without overwriting the primary radar cache (`STORAGE_KEY_API_CACHE`).
+   */
+  static async fetchStationsAtPoint({ lat, lng, radiusKm = 25, apiKey = '', demoMode = false } = {}) {
+    const cleanKey = (apiKey || '').trim();
+    const rad = Math.min(25, Math.max(1, Number(radiusKm) || 25));
+
+    if (demoMode || !cleanKey) {
+      return {
+        ok: true,
+        source: 'demo',
+        cached: false,
+        stations: this.generateSimulatedStations(lat, lng, rad)
+      };
+    }
+
+    const bucketCheck = this.checkAndConsumeToken();
+    if (!bucketCheck.allowed) {
+      return {
+        ok: false,
+        source: 'live',
+        rateLimited: true,
+        waitSec: bucketCheck.waitSec,
+        stations: []
+      };
+    }
+
+    const url = new URL(TANKERKOENIG_BASE_URL);
+    url.searchParams.set('lat', String(lat));
+    url.searchParams.set('lng', String(lng));
+    url.searchParams.set('rad', String(rad));
+    url.searchParams.set('sort', 'dist');
+    url.searchParams.set('type', 'all');
+    url.searchParams.set('apikey', cleanKey);
+
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' }
+    });
+
+    if (response.status === 503) {
+      this.registerServerRateLimit503();
+      return {
+        ok: false,
+        source: 'live',
+        rateLimited: true,
+        waitSec: 600,
+        stations: []
+      };
+    }
+
+    if (!response.ok) {
+      throw new Error(`Tankerkönig Serverfehler (HTTP ${response.status})`);
+    }
+
+    const data = await response.json();
+    if (!data.ok) {
+      throw new Error(data.message || 'API-Anfrage abgelehnt.');
+    }
+
+    const stations = (data.stations || []).map((st) => this.normalizeStation(st));
+    return {
+      ok: true,
+      source: 'live',
+      cached: false,
+      license: data.license || 'CC BY 4.0 Tankerkönig / MTS-K',
+      stations
+    };
+  }
+
+  /**
    * Normalizes a Tankerkönig station object for consistent UI and DB handling.
    */
   static normalizeStation(raw) {
@@ -546,8 +617,11 @@ export class FuelApiService {
   }
 
   static getSimulatedDetail(stationId) {
-    const is24h = ['sim-jet-01', 'sim-hem-03', 'sim-esso-05', 'sim-shell-06', 'sim-globus-08', 'sim-raiffeisen-10'].includes(stationId);
-    const isClosedMidday = stationId === 'sim-bft-04';
+    const idStr = String(stationId || '');
+    const is24h =
+      ['sim-jet-01', 'sim-hem-03', 'sim-esso-05', 'sim-shell-06', 'sim-globus-08', 'sim-raiffeisen-10'].includes(idStr) ||
+      (idStr.startsWith('sim-route-') && !idStr.endsWith('-04') && !idStr.endsWith('-07'));
+    const isClosedMidday = idStr === 'sim-bft-04';
     return {
       id: stationId,
       wholeDay: is24h,
@@ -656,10 +730,12 @@ export class FuelApiService {
 
   /**
    * Builds Google Maps deep links optimized for driving / active navigation on mobile.
-   * 1. Direct Turn-by-Turn Navigation (`dir` action with travelmode=driving)
-   * 2. Map Pin / Route Overview (`search` query at exact lat,lng + station brand)
+   * 1. Direct Turn-by-Turn Navigation (`dir` action with travelmode=driving).
+   *    When `routeDestination` is provided, sets `destination` to the user's final destination
+   *    and inserts the selected station as a `waypoints` stopover.
+   * 2. Map Pin / Route Overview (`search` query at exact lat,lng + station brand).
    */
-  static getGoogleMapsLinks(station) {
+  static getGoogleMapsLinks(station, routeDestination = null) {
     const lat = Number(station.lat);
     const lng = Number(station.lng);
     const hasCoords = !isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0;
@@ -667,9 +743,22 @@ export class FuelApiService {
     const labelQuery = encodeURIComponent(label);
     const destination = hasCoords ? `${lat},${lng}` : labelQuery;
 
+    const destLat = routeDestination ? Number(routeDestination.lat) : NaN;
+    const destLng = routeDestination ? Number(routeDestination.lng) : NaN;
+    const hasRouteDest =
+      hasCoords &&
+      Number.isFinite(destLat) &&
+      Number.isFinite(destLng) &&
+      (destLat !== 0 || destLng !== 0);
+
+    const navigateUrl = hasRouteDest
+      ? `https://www.google.com/maps/dir/?api=1&destination=${destLat},${destLng}&waypoints=${lat},${lng}&travelmode=driving`
+      : `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=driving`;
+
     return {
-      // Starts turn-by-turn route guidance immediately or offers "Add stop" in active Google Maps navigation
-      navigateUrl: `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=driving`,
+      // Starts turn-by-turn route guidance immediately or injects station as waypoint into final destination route
+      navigateUrl,
+      isRouteWaypoint: hasRouteDest,
       // Opens the exact station pin on the Google Maps canvas to inspect detour relative to current route
       mapViewUrl: hasCoords
         ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`

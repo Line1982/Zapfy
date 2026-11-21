@@ -14,12 +14,12 @@
   <meta name="format-detection" content="telephone=no">
 
   <!-- Manifest & Icons -->
-  <link rel="manifest" href="manifest.json?v=2.0.0">
+  <link rel="manifest" href="manifest.json?v=2.1.0">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png?v=2.0.0">
   <link rel="icon" type="image/png" href="assets/icon-192.png?v=2.0.0">
   <link rel="icon" type="image/x-icon" href="assets/favicon.ico?v=2.0.0">
 
-  <link rel="stylesheet" href="styles.css?v=2.0.0">
+  <link rel="stylesheet" href="styles.css?v=2.1.0">
 </head>
 <body>
 
@@ -37,21 +37,16 @@
           <!-- Central Radar Control & Station List Card (Full Height, Zero Visual Noise) -->
           <div class="radar-card">
 
-            <!-- Quiet Glance-Only Top Status Strip (No forced reach during drive) -->
-            <div class="radar-status-strip">
-              <button type="button" class="radar-forecast-bar" id="btnRadarForecastBar" title="Zur Detail-Prognose wechseln">
-                <span class="radar-signal-dot" aria-hidden="true"></span>
-                <div class="radar-forecast-copy">
-                  <span class="radar-forecast-text" id="radarForecastText">Lade Preisprognose…</span>
-                  <span class="radar-gps-subline" id="gpsStatusText">GPS wird geortet…</span>
-                </div>
-                <span class="radar-forecast-meta" id="radarForecastMeta">18–20h ›</span>
+            <!-- Route Corridor Bar (1-Tap Route Mode & Google Maps Paste) -->
+            <div class="route-bar" id="routeBar">
+              <button type="button" class="route-bar-main" id="btnOpenRouteSheet" title="Tankstopp entlang deiner Fahrstrecke planen">
+                <span class="route-bar-icon" aria-hidden="true">🛣️</span>
+                <span class="route-bar-text" id="routeBarText">Tankstopp auf Route planen…</span>
+                <span class="route-bar-meta" id="routeBarMeta">Ziel ›</span>
               </button>
-
-              <button type="button" class="savings-trophy-pill" id="btnSavingsBadge" title="Deine gesamte Zapfy-Ersparnis (Antippen für Statistik)">
-                <span class="savings-trophy-icon" aria-hidden="true">🏆</span>
-                <span id="headerSavingsTotal">0,00 €</span>
-              </button>
+              <button type="button" class="route-bar-action" id="btnPasteRouteQuick" title="Ziel oder Google-Maps-Link aus Zwischenablage einfügen" aria-label="Aus Google Maps einfügen">📋</button>
+              <button type="button" class="route-bar-action is-recalc" id="btnRecalcRoute" hidden title="Route ab aktuellem Standort neu berechnen" aria-label="Route neu berechnen">↻</button>
+              <button type="button" class="route-bar-action is-clear" id="btnClearRoute" hidden title="Routen-Modus beenden" aria-label="Route beenden">✕</button>
             </div>
 
             <!-- Home Reference Banner (Live comparison vs. user's home station) -->
@@ -449,10 +444,73 @@
 
   </div>
 
+  <!-- Route Planner Bottom-Sheet (Google Maps Handover & Quick Destinations) -->
+  <div class="route-sheet-backdrop" id="routeSheetBackdrop" hidden>
+    <div class="route-sheet" id="routeSheet" role="dialog" aria-modal="true" aria-labelledby="routeSheetTitle">
+      <div class="route-sheet-header">
+        <div class="route-sheet-title-wrap">
+          <span aria-hidden="true">🛣️</span>
+          <h2 class="route-sheet-title" id="routeSheetTitle">Tankstopp auf meiner Route</h2>
+        </div>
+        <button type="button" class="route-sheet-close" id="btnCloseRouteSheet" aria-label="Schließen">✕</button>
+      </div>
+
+      <div class="route-sheet-body">
+        <form class="route-search-form" id="routeSearchForm">
+          <input
+            type="text"
+            class="route-dest-input"
+            id="routeDestInput"
+            placeholder="Ziel, Adresse, PLZ oder Maps-Link…"
+            autocomplete="off"
+          >
+          <button type="submit" class="route-go-btn" id="btnPlanRouteSubmit">Start</button>
+        </form>
+
+        <div class="route-quick-actions">
+          <button type="button" class="route-paste-btn" id="btnPasteRouteInSheet">
+            <span>📋 Aus Google Maps einfügen</span>
+          </button>
+          <div class="route-corridor-pills" role="group" aria-label="Korridor-Breite">
+            <button type="button" class="route-corridor-pill active" data-corridor="3">≤ 3 km</button>
+            <button type="button" class="route-corridor-pill" data-corridor="6">≤ 6 km</button>
+          </div>
+        </div>
+
+        <div class="route-section">
+          <div class="route-section-head">
+            <span class="route-section-label">Schnellziele</span>
+            <button type="button" class="route-save-fav-btn" id="btnSaveCurrentRouteFav" hidden>+ Aktuelles Ziel merken</button>
+          </div>
+          <div class="route-chips-list" id="routeFavoritesList">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+
+        <div class="route-section" id="routeRecentSection" hidden>
+          <div class="route-section-head">
+            <span class="route-section-label">Letzte Ziele</span>
+          </div>
+          <div class="route-chips-list" id="routeRecentList">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+
+        <details class="ios-shortcut-tip">
+          <summary>💡 Tipp: Direkt „Teilen → Zapfy“ aus Google Maps</summary>
+          <p>
+            <strong>Android:</strong> Installierte Zapfy-PWA erscheint direkt im Teilen-Menü von Google Maps.<br>
+            <strong>iPhone (iOS):</strong> In 30 Sek. in Apple <em>Kurzbefehle</em>: „URL / Text empfangen (im Teilen-Blatt zeigen)“ → Aktion <em>URL öffnen</em> mit deiner Zapfy-URL + <code>?dest=</code> + übergebenem Text/Link. Oder in Maps <em>Teilen → Kopieren</em> und oben auf <strong>📋</strong> tippen.
+          </p>
+        </details>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Feedback Container -->
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
   <!-- App Entry Script -->
-  <script type="module" src="js/app.js?v=2.0.0"></script>
+  <script type="module" src="js/app.js?v=2.1.0"></script>
 </body>
 </html>
