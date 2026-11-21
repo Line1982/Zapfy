@@ -4,11 +4,11 @@
  * turn-by-turn navigation handover, IndexedDB price snapshot recording, and statistical forecasting.
  */
 
-import { db } from './db.js';
-import { FuelApiService } from './fuel_api.js';
-import { PriceEngine } from './price_engine.js';
-import { RouteService } from './route_service.js';
-import { ExportService } from './export_service.js';
+import { db } from './db.js?v=2.2.0';
+import { FuelApiService } from './fuel_api.js?v=2.2.0';
+import { PriceEngine } from './price_engine.js?v=2.2.0';
+import { RouteService } from './route_service.js?v=2.2.0';
+import { ExportService } from './export_service.js?v=2.2.0';
 
 const FUEL_LABELS = {
   e10: 'Super E10',
@@ -1101,9 +1101,59 @@ class ZapfyApp {
   }
 
   /**
-   * Formats the quiet open/closed indicator for a station card (`● Offen (24h)` / `● Bis 22:00` vs `○ Öffnet 08:00` / `○ Geschlossen`).
+   * Formats the open/closed indicator for a station card.
+   * For active route stations, evaluates against the estimated arrival time (ETA).
    */
   formatOpenStatusHtml(st, { compact = false } = {}) {
+    if (st && st.isRouteStation && st.etaTimeLabel) {
+      const status = st.arrivalOpenStatus;
+      const eta = this.escapeHtml(st.etaTimeLabel);
+      const closeTime = this.escapeHtml(st.arrivalClosingLabel || '');
+      const openTime = this.escapeHtml(st.arrivalOpeningLabel || '');
+
+      if (status === 'closed_at_arrival' || status === 'closing_imminent') {
+        if (compact) {
+          return `<span class="meta-status-closed">⚠ Zu ~${eta}</span>`;
+        }
+        return closeTime && closeTime !== '24h'
+          ? `<span class="meta-status-closed">⚠ Zu bei ~${eta} (bis ${closeTime})</span>`
+          : `<span class="meta-status-closed">⚠ Zu bei Ankunft (~${eta})</span>`;
+      }
+
+      if (status === 'tight') {
+        return compact
+          ? `<span class="meta-status-tight">⚠ ${closeTime}</span>`
+          : `<span class="meta-status-tight">⚠ Knapp · bis ${closeTime} (~${eta})</span>`;
+      }
+
+      if (status === 'open_24h') {
+        return compact
+          ? '<span class="meta-status-open" title="24h geöffnet">●</span>'
+          : '<span class="meta-status-open">● Offen (24h)</span>';
+      }
+
+      if (status === 'open') {
+        if (compact) {
+          return '<span class="meta-status-open" title="Bei Ankunft geöffnet">●</span>';
+        }
+        if (!st.isOpen && openTime && openTime !== '24h') {
+          return `<span class="meta-status-open">● Ab ${openTime} offen (~${eta})</span>`;
+        }
+        return closeTime
+          ? `<span class="meta-status-open">● Bis ${closeTime} (~${eta})</span>`
+          : `<span class="meta-status-open">● Offen (~${eta})</span>`;
+      }
+
+      if (!st.isOpen) {
+        return compact
+          ? '<span class="meta-status-closed">○ Zu</span>'
+          : `<span class="meta-status-closed">○ Aktuell zu (Ankunft ~${eta})</span>`;
+      }
+      return compact
+        ? '<span class="meta-status-open" title="Geöffnet">●</span>'
+        : `<span class="meta-status-open">● Offen (~${eta})</span>`;
+    }
+
     const detail = this.stationDetailsMap.get(st.id);
     let openingLabel = detail?.openingLabel;
     let closingLabel = detail?.closingLabel;
@@ -1329,7 +1379,8 @@ class ZapfyApp {
   buildDistArrowHtml(st, { size = 13 } = {}) {
     if (st && st.isRouteStation) {
       const remLabel = this.formatRouteAheadDist(st.remainingAlongRouteKm ?? st.dist, { compact: false });
-      return `<span class="meta-route-km">${remLabel}</span>`;
+      const etaSuffix = st.etaTimeLabel && st.etaMinutes >= 5 ? ` (~${this.escapeHtml(st.etaTimeLabel)})` : '';
+      return `<span class="meta-route-km">${remLabel}${etaSuffix}</span>`;
     }
     const distRawStr = `${st.dist.toFixed(1).replace('.', ',')} km`;
     if (typeof st.relBearingDeg !== 'number') {
@@ -1353,6 +1404,9 @@ class ZapfyApp {
         {
           currentAlongRouteKm: this.activeRoute.currentAlongRouteKm || 0,
           totalRouteKm: this.activeRoute.distanceKm || 0,
+          totalDurationMin: this.activeRoute.durationMin || 0,
+          stationDetailsMap: this.stationDetailsMap,
+          now: new Date(),
           showAll: this.showAllStations,
           skippedIds: this.skippedStationIds
         }
@@ -1465,9 +1519,13 @@ class ZapfyApp {
     const savingGain = this.computeStationSavingGain(st);
     const savingStr = savingGain.toFixed(2).replace('.', ',');
 
+    const isOpenEffective = st.isRouteStation ? Boolean(st.effectiveOpenAtArrival) : Boolean(st.isOpen);
     let dealBadgeText = '★ Top-Empfehlung';
     let dealNeutral = false;
-    if (st.isRouteStation && isWinner && savingGain > 0.25) {
+    if (st.isRouteStation && !isOpenEffective) {
+      dealBadgeText = `⚠ Bei Ankunft zu (~${st.etaTimeLabel || ''})`;
+      dealNeutral = true;
+    } else if (st.isRouteStation && isWinner && savingGain > 0.25) {
       dealBadgeText = `🛣️ Top-Stopp · −${savingStr} €`;
     } else if (st.isWorthwhileDetour && st.netSavingVsNearest > 0) {
       dealBadgeText = `⚡ Bester Deal · −${st.netSavingVsNearest.toFixed(2).replace('.', ',')} € netto`;
@@ -1510,10 +1568,10 @@ class ZapfyApp {
       : 'Direkt in Google Maps dorthin navigieren';
 
     return `
-      <article class="station-card is-hero ${isWinner ? 'is-winner' : ''} ${!st.isOpen ? 'is-closed' : ''}" data-station-id="${this.escapeHtml(st.id)}" title="Antippen, um genaue Schließzeit zu prüfen">
+      <article class="station-card is-hero ${isWinner ? 'is-winner' : ''} ${!isOpenEffective ? 'is-closed' : ''}" data-station-id="${this.escapeHtml(st.id)}" title="Antippen, um genaue Schließzeit zu prüfen">
         <div class="hero-badge-row">
           <span class="hero-deal-pill ${dealNeutral ? 'is-neutral' : ''}">${dealBadgeText}</span>
-          <span class="hero-open-label ${!st.isOpen ? 'is-closed' : ''}">${openStatusHtml}</span>
+          <span class="hero-open-label ${!isOpenEffective ? 'is-closed' : ''}">${openStatusHtml}</span>
         </div>
 
         <div class="station-top-row">
@@ -1604,8 +1662,10 @@ class ZapfyApp {
       deltaHtml
     ].filter(Boolean).join('<span class="meta-dot">·</span>');
 
+    const isOpenEffective = st.isRouteStation ? Boolean(st.effectiveOpenAtArrival) : Boolean(st.isOpen);
+
     return `
-      <div class="station-alt-card ${!st.isOpen ? 'is-closed' : ''}" data-station-id="${this.escapeHtml(st.id)}" title="Antippen für genaue Öffnungszeiten">
+      <div class="station-alt-card ${!isOpenEffective ? 'is-closed' : ''}" data-station-id="${this.escapeHtml(st.id)}" title="Antippen für genaue Öffnungszeiten">
         <div class="alt-dir-box">
           ${hasArrow
             ? `<svg class="route-dir-svg ${st.routeStatus === 'ahead' ? 'is-ahead' : ''}" style="transform:rotate(${arrowDeg}deg)" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>`
@@ -1659,12 +1719,13 @@ class ZapfyApp {
     }
 
     const hero = ranking.list[0];
+    const heroOpen = hero.isRouteStation ? Boolean(hero.effectiveOpenAtArrival) : Boolean(hero.isOpen);
     const isHeroWinner =
       this.sortMode === 'smart'
-        ? Boolean(hero.isBestSmart && hero.isOpen)
+        ? Boolean(hero.isBestSmart && heroOpen)
         : this.sortMode === 'price'
-          ? Boolean(hero.isCheapest && hero.isOpen)
-          : Boolean(hero.isOpen && (hero.isBestSmart || hero.isCheapest));
+          ? Boolean(hero.isCheapest && heroOpen)
+          : Boolean(heroOpen && (hero.isBestSmart || hero.isCheapest));
 
     const parts = [this.buildHeroStationHtml(hero, ranking, isHeroWinner)];
 
@@ -1716,7 +1777,7 @@ class ZapfyApp {
     const gmaps = FuelApiService.getGoogleMapsLinks(hero, routeDest);
     const arrowDeg = typeof hero.relBearingDeg === 'number' ? hero.relBearingDeg : 0;
     const distStr = hero.isRouteStation
-      ? this.formatRouteAheadDist(hero.remainingAlongRouteKm ?? hero.dist, { compact: false })
+      ? `${this.formatRouteAheadDist(hero.remainingAlongRouteKm ?? hero.dist, { compact: false })}${hero.etaTimeLabel && hero.etaMinutes >= 5 ? ` (~${hero.etaTimeLabel})` : ''}`
       : `${hero.dist.toFixed(1).replace('.', ',')} km`;
     const placeStr = hero.place || (hero.street ? hero.street : '');
     const routeText = hero.isRouteStation
@@ -2102,9 +2163,10 @@ class ZapfyApp {
       });
       await this.planRouteToDestination(dest);
     } catch (err) {
-      this.showToast(err.message || 'Ziel konnte nicht aufgelöst werden');
+      this.showToast(err.message || 'Ziel konnte nicht aufgelöst werden', { durationMs: 5500 });
       const inputEl = document.getElementById('routeDestInput');
       if (inputEl) {
+        if (!inputEl.value && rawInput) inputEl.value = String(rawInput);
         this.openRouteSheet();
       }
     } finally {
@@ -2165,6 +2227,17 @@ class ZapfyApp {
       const fallbackNote = route.isFallback ? ' (Luftlinie)' : '';
       const relaxNote = filterInfo.relaxed ? ` · auf ≤ ${filterInfo.usedCorridorKm} km erweitert` : '';
       this.showToast(`🛣️ Route nach ${dest.label}: ${this.routeStations.length} Tankstellen${fallbackNote}${relaxNote}`);
+
+      // Silently prefetch opening hours for top 2 live route candidates so ETA check has real closing times
+      if (corridorRes.source === 'live' && this.config.apiKey) {
+        const topCandidates = this.computeActiveRanking().list.slice(0, 2);
+        for (const cand of topCandidates) {
+          const cached = this.stationDetailsMap.get(cand.id);
+          if ((!cached || cached.isStale) && FuelApiService.peekTokenState().ready) {
+            await this.loadAndCacheStationOpeningHours(cand.id, { userInitiated: false });
+          }
+        }
+      }
     } catch (err) {
       this.showToast(`Routen-Fehler: ${err.message}`);
     } finally {

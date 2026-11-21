@@ -5,7 +5,7 @@
  * refueling recommendations ("Jetzt tanken" vs. "Besser 18–20 Uhr tanken").
  */
 
-import { FuelApiService } from './fuel_api.js';
+import { FuelApiService } from './fuel_api.js?v=2.2.0';
 
 export class PriceEngine {
   /**
@@ -369,6 +369,9 @@ export class PriceEngine {
   ) {
     const currentAlongRouteKm = Number(routeContext?.currentAlongRouteKm) || 0;
     const totalRouteKm = Number(routeContext?.totalRouteKm) || 0;
+    const totalDurationMin = Number(routeContext?.totalDurationMin) || 0;
+    const stationDetailsMap = routeContext?.stationDetailsMap instanceof Map ? routeContext.stationDetailsMap : null;
+    const now = routeContext?.now instanceof Date ? routeContext.now : new Date();
     const showAll = Boolean(routeContext && routeContext.showAll);
     const skippedIds = routeContext && routeContext.skippedIds instanceof Set ? routeContext.skippedIds : null;
 
@@ -410,6 +413,17 @@ export class PriceEngine {
       const remainingAlongRouteKm = Number((alongRouteKm - currentAlongRouteKm).toFixed(1));
       const isPassed = remainingAlongRouteKm < -0.5;
 
+      const etaMinutes = totalRouteKm > 0 && totalDurationMin > 0
+        ? Math.max(0, Math.round((Math.max(0, remainingAlongRouteKm) / totalRouteKm) * totalDurationMin))
+        : 0;
+      const arrivalDate = new Date(now.getTime() + etaMinutes * 60000);
+      const etaTimeLabel = `${String(arrivalDate.getHours()).padStart(2, '0')}:${String(arrivalDate.getMinutes()).padStart(2, '0')}`;
+
+      const detail = (stationDetailsMap && stationDetailsMap.get(st.id)) ||
+        (String(st.id).startsWith('sim-') ? FuelApiService.getSimulatedDetail(st.id) : null);
+      const arrivalEval = FuelApiService.evaluateOpenAtTime(detail, arrivalDate);
+      const effectiveOpenAtArrival = arrivalEval.known ? Boolean(arrivalEval.isOpenAtTime) : Boolean(st.isOpen);
+
       const tripFuelLiters = (estimatedDetourKm * effectiveConsumption) / 100;
       const detourFuelCost = Number((tripFuelLiters * activePrice).toFixed(2));
       const effectiveTotalCost = Number(((effectiveTank + tripFuelLiters) * activePrice).toFixed(2));
@@ -423,6 +437,14 @@ export class PriceEngine {
         alongRouteKm,
         remainingAlongRouteKm,
         isPassed,
+        etaMinutes,
+        etaTimeLabel,
+        arrivalOpenStatus: arrivalEval.status,
+        arrivalOpenKnown: arrivalEval.known,
+        arrivalMinutesUntilClose: arrivalEval.minutesUntilClose,
+        arrivalClosingLabel: arrivalEval.closingLabel,
+        arrivalOpeningLabel: arrivalEval.openingLabel,
+        effectiveOpenAtArrival,
         routeStatus: 'ahead',
         effectiveRoundTripKm: estimatedDetourKm,
         detourFuelCost,
@@ -447,7 +469,7 @@ export class PriceEngine {
       if (minPrice === null || st.activePrice < minPrice) minPrice = st.activePrice;
       if (maxPrice === null || st.activePrice > maxPrice) maxPrice = st.activePrice;
       sumPrice += st.activePrice;
-      if (st.isOpen) {
+      if (st.effectiveOpenAtArrival) {
         openSumPrice += st.activePrice;
         openCountAll += 1;
         if (minEffectiveTotalCost === null || st.effectiveTotalCost < minEffectiveTotalCost) {
@@ -461,7 +483,9 @@ export class PriceEngine {
     const baselineTotalCost = baselinePrice !== null ? baselinePrice * effectiveTank : null;
 
     activePool.sort((a, b) => {
-      if (a.isOpen !== b.isOpen) return a.isOpen ? -1 : 1;
+      if (a.effectiveOpenAtArrival !== b.effectiveOpenAtArrival) {
+        return a.effectiveOpenAtArrival ? -1 : 1;
+      }
 
       if (sortMode === 'dist') {
         const remA = Math.max(0, a.remainingAlongRouteKm);
@@ -489,13 +513,13 @@ export class PriceEngine {
       const diffToMin = minPrice !== null ? Number((st.activePrice - minPrice).toFixed(3)) : 0;
       const isCheapest = minPrice !== null && Math.abs(st.activePrice - minPrice) < 0.0005;
       const isBestSmart =
-        st.isOpen && minEffectiveTotalCost !== null && Math.abs(st.effectiveTotalCost - minEffectiveTotalCost) <= 0.05;
+        st.effectiveOpenAtArrival && minEffectiveTotalCost !== null && Math.abs(st.effectiveTotalCost - minEffectiveTotalCost) <= 0.05;
       const diffToBestNet =
         minEffectiveTotalCost !== null ? Number((st.effectiveTotalCost - minEffectiveTotalCost).toFixed(2)) : 0;
       const netSavingVsNearest =
         baselineTotalCost !== null ? Number((baselineTotalCost - st.effectiveTotalCost).toFixed(2)) : 0;
       const isWorthwhileDetour = Boolean(
-        st.isOpen && st.corridorDistKm > 0.4 && netSavingVsNearest >= 0.4
+        st.effectiveOpenAtArrival && st.corridorDistKm > 0.4 && netSavingVsNearest >= 0.4
       );
 
       return {
@@ -518,7 +542,7 @@ export class PriceEngine {
     const MAX_VISIBLE = 8;
     const visiblePriced = showAll ? unskippedRanked : unskippedRanked.slice(0, MAX_VISIBLE);
     const hiddenCount = Math.max(0, unskippedRanked.length - visiblePriced.length);
-    const openCount = rankedAll.filter((s) => s.isOpen).length;
+    const openCount = rankedAll.filter((s) => s.effectiveOpenAtArrival).length;
 
     return {
       list: visiblePriced,

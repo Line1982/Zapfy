@@ -729,6 +729,127 @@ export class FuelApiService {
   }
 
   /**
+   * Evaluates cached or simulated opening hours against an estimated arrival timestamp.
+   */
+  static evaluateOpenAtTime(detail, targetDate = new Date()) {
+    if (!detail) {
+      return {
+        known: false,
+        isOpenAtTime: null,
+        status: 'unknown',
+        minutesUntilClose: null,
+        closingLabel: '',
+        openingLabel: ''
+      };
+    }
+
+    const closingLabel = detail.closingLabel || this.extractClosingTimeLabel(detail.wholeDay, detail.openingTimes);
+    const openingLabel = detail.openingLabel || this.extractOpeningTimeLabel(detail.wholeDay, detail.openingTimes);
+
+    if (detail.wholeDay || closingLabel === '24h') {
+      return {
+        known: true,
+        isOpenAtTime: true,
+        status: 'open_24h',
+        minutesUntilClose: Infinity,
+        closingLabel: '24h',
+        openingLabel: '24h'
+      };
+    }
+
+    const entry = this.pickTodayOpeningEntry(detail.openingTimes, targetDate);
+    const parseMin = (hhmm, isEnd = false) => {
+      const m = String(hhmm || '').trim().match(/^(\d{1,2}):(\d{2})/);
+      if (!m) return null;
+      const h = Number(m[1]);
+      const min = Number(m[2]);
+      if (isEnd && (h === 24 || (h === 0 && min === 0))) return 1440;
+      return h * 60 + min;
+    };
+
+    const startMin = parseMin(entry?.start || openingLabel, false);
+    const endMin = parseMin(entry?.end || closingLabel, true);
+    if (startMin === null || endMin === null) {
+      return {
+        known: false,
+        isOpenAtTime: null,
+        status: 'unknown',
+        minutesUntilClose: null,
+        closingLabel,
+        openingLabel
+      };
+    }
+
+    if (startMin === 0 && endMin === 1440) {
+      return {
+        known: true,
+        isOpenAtTime: true,
+        status: 'open_24h',
+        minutesUntilClose: Infinity,
+        closingLabel: '24h',
+        openingLabel: '24h'
+      };
+    }
+
+    const targetMin = targetDate.getHours() * 60 + targetDate.getMinutes();
+    let isWithin = false;
+    let minutesUntilClose = 0;
+
+    if (endMin > startMin) {
+      isWithin = targetMin >= startMin && targetMin < endMin;
+      minutesUntilClose = isWithin ? endMin - targetMin : 0;
+    } else if (endMin < startMin) {
+      // Overnight span (e.g., 06:00 - 01:00)
+      isWithin = targetMin >= startMin || targetMin < endMin;
+      if (isWithin) {
+        minutesUntilClose = targetMin >= startMin ? (1440 - targetMin) + endMin : endMin - targetMin;
+      }
+    }
+
+    if (!isWithin) {
+      return {
+        known: true,
+        isOpenAtTime: false,
+        status: 'closed_at_arrival',
+        minutesUntilClose: 0,
+        closingLabel,
+        openingLabel
+      };
+    }
+
+    if (minutesUntilClose < 10) {
+      return {
+        known: true,
+        isOpenAtTime: false,
+        status: 'closing_imminent',
+        minutesUntilClose,
+        closingLabel,
+        openingLabel
+      };
+    }
+
+    if (minutesUntilClose <= 25) {
+      return {
+        known: true,
+        isOpenAtTime: true,
+        status: 'tight',
+        minutesUntilClose,
+        closingLabel,
+        openingLabel
+      };
+    }
+
+    return {
+      known: true,
+      isOpenAtTime: true,
+      status: 'open',
+      minutesUntilClose,
+      closingLabel,
+      openingLabel
+    };
+  }
+
+  /**
    * Builds Google Maps deep links optimized for driving / active navigation on mobile.
    * 1. Direct Turn-by-Turn Navigation (`dir` action with travelmode=driving).
    *    When `routeDestination` is provided, sets `destination` to the user's final destination

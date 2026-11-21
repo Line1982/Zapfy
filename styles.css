@@ -753,6 +753,11 @@ html, body {
   font-weight: 800;
 }
 
+.meta-status-tight {
+  color: var(--amber);
+  font-weight: 800;
+}
+
 /* Bottom Row of Station Card: 1-Tap Google Maps Handover Buttons */
 .station-actions-row {
   display: flex;

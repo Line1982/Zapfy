@@ -3,7 +3,7 @@
  * Handles JSON backup via Web Share API or download, JSON restore, and CSV export of collected price history.
  */
 
-import { db } from './db.js';
+import { db } from './db.js?v=2.2.0';
 
 export class ExportService {
   /**
