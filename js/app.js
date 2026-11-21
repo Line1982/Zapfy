@@ -4,10 +4,11 @@
  * turn-by-turn navigation handover, IndexedDB price snapshot recording, and statistical forecasting.
  */
 
-import { db } from './db.js';
-import { FuelApiService } from './fuel_api.js';
-import { PriceEngine } from './price_engine.js';
-import { ExportService } from './export_service.js';
+import { db } from './db.js?v=2.2.1';
+import { FuelApiService } from './fuel_api.js?v=2.2.1';
+import { PriceEngine } from './price_engine.js?v=2.2.1';
+import { RouteService } from './route_service.js?v=2.2.1';
+import { ExportService } from './export_service.js?v=2.2.1';
 
 const FUEL_LABELS = {
   e10: 'Super E10',
@@ -31,7 +32,8 @@ class ZapfyApp {
       tankVolume: 50,
       consumption: 7.0,
       defaultFuel: 'e10',
-      fallbackRegion: '52.5200,13.4050'
+      fallbackRegion: '52.5200,13.4050',
+      shortlinkResolverUrl: ''
     };
 
     this.currentLocation = {
@@ -72,6 +74,15 @@ class ZapfyApp {
     this.homeSearchResults = [];
     this.homeSearchPlaceLabel = '';
     this.homeSearchFilter = '';
+
+    // Route Corridor & Google Maps Waypoint Handover State
+    this.activeRoute = null;
+    this.routeRawStations = [];
+    this.routeStations = [];
+    this.routeCorridorKm = 3.0;
+    this.routeFavorites = [];
+    this.recentDestinations = [];
+    this.isPlanningRoute = false;
   }
 
   async init() {
@@ -86,6 +97,7 @@ class ZapfyApp {
     // Immediately render cached/initial state, then acquire GPS & live prices on startup
     this.renderAll();
     await this.refreshGpsAndFetchPrices({ silentGpsFallback: true });
+    await this.handleIncomingDestinationParams();
 
     // Activate Drive Mode (continuous low-cost GPS watch + screen wake lock for car phone mount)
     this.startDriveModeWatcher();
@@ -98,7 +110,8 @@ class ZapfyApp {
   async loadSettingsAndData() {
     const [
       apiKey, demoMode, tankVolume, consumption, defaultFuel, fallbackRegion, sortMode,
-      themeMode, savingsTotal, fillCount, homeStation, favorites, snapshots, detailsMap
+      themeMode, savingsTotal, fillCount, homeStation, routeFavorites, recentDestinations,
+      routeCorridorKm, shortlinkResolverUrl, favorites, snapshots, detailsMap
     ] = await Promise.all([
       db.getSetting('apiKey', ''),
       db.getSetting('demoMode', false),
@@ -111,6 +124,10 @@ class ZapfyApp {
       db.getSetting('savingsTotal', 0),
       db.getSetting('fillCount', 0),
       db.getSetting('homeStation', null),
+      db.getSetting('routeFavorites', []),
+      db.getSetting('recentDestinations', []),
+      db.getSetting('routeCorridorKm', 3.0),
+      db.getSetting('shortlinkResolverUrl', ''),
       db.getFavorites(),
       db.getAllSnapshots(),
       db.getAllStationDetailsMap()
@@ -122,7 +139,8 @@ class ZapfyApp {
       tankVolume: Number(tankVolume) || 50,
       consumption: Number(consumption) > 0 ? Number(consumption) : 7.0,
       defaultFuel: ['e10', 'e5', 'diesel'].includes(defaultFuel) ? defaultFuel : 'e10',
-      fallbackRegion: fallbackRegion || '52.5200,13.4050'
+      fallbackRegion: fallbackRegion || '52.5200,13.4050',
+      shortlinkResolverUrl: String(shortlinkResolverUrl || '').trim()
     };
 
     this.fuelType = this.config.defaultFuel;
@@ -140,6 +158,9 @@ class ZapfyApp {
 
     this.favoritesSet = new Set((favorites || []).map((f) => f.id));
     this.homeStation = homeStation && homeStation.id ? homeStation : null;
+    this.routeFavorites = Array.isArray(routeFavorites) ? routeFavorites : [];
+    this.recentDestinations = Array.isArray(recentDestinations) ? recentDestinations : [];
+    this.routeCorridorKm = Number(routeCorridorKm) === 6 ? 6.0 : 3.0;
     this.stationDetailsMap = detailsMap || new Map();
     // Auto-migrate legacy cached records that missed openingLabel
     for (const [id, item] of this.stationDetailsMap.entries()) {
@@ -167,6 +188,13 @@ class ZapfyApp {
     // Savings Trophy Counters
     this.renderSavingsBadge();
 
+    // Route Corridor Pills & Bar
+    document.querySelectorAll('.route-corridor-pill[data-corridor]').forEach((btn) => {
+      const val = Number(btn.getAttribute('data-corridor'));
+      btn.classList.toggle('active', val === this.routeCorridorKm);
+    });
+    this.renderRouteBar();
+
     // Settings Form Fields
     const inpTank = document.getElementById('settingTankVolume');
     const inpConsumption = document.getElementById('settingConsumption');
@@ -174,12 +202,14 @@ class ZapfyApp {
     const inpDemo = document.getElementById('settingDemoMode');
     const selFuel = document.getElementById('settingDefaultFuel');
     const selRegion = document.getElementById('settingFallbackRegion');
+    const inpResolver = document.getElementById('settingResolverUrl');
 
     if (inpTank) inpTank.value = this.config.tankVolume;
     if (inpConsumption) inpConsumption.value = Number(this.config.consumption || 7.0).toFixed(1);
     if (inpKey) inpKey.value = this.config.apiKey;
     if (inpDemo) inpDemo.checked = this.config.demoMode;
     if (selFuel) selFuel.value = this.config.defaultFuel;
+    if (inpResolver) inpResolver.value = this.config.shortlinkResolverUrl || '';
 
     // Setup Fuel Pills
     document.querySelectorAll('.setup-fuel-pill[data-setup-fuel]').forEach((btn) => {
@@ -228,22 +258,6 @@ class ZapfyApp {
         this.switchTabByIndex(idx);
       });
     });
-
-    // Quiet 1-Line Forecast Bar on Tab 1 -> Jumps to Tab 2 (Prognose)
-    const btnRadarForecastBar = document.getElementById('btnRadarForecastBar');
-    if (btnRadarForecastBar) {
-      btnRadarForecastBar.addEventListener('click', () => {
-        this.switchTabByIndex(1);
-      });
-    }
-
-    // Savings Trophy Pill -> Jumps to Tab 2 (Prognose & Spar-Konto)
-    const btnSavingsBadge = document.getElementById('btnSavingsBadge');
-    if (btnSavingsBadge) {
-      btnSavingsBadge.addEventListener('click', () => {
-        this.switchTabByIndex(1);
-      });
-    }
 
     const btnUndoLastTanked = document.getElementById('btnUndoLastTanked');
     if (btnUndoLastTanked) {
@@ -335,7 +349,7 @@ class ZapfyApp {
             if (this.homeStation && this.homeStation.id === stId) {
               await this.clearHomeStation();
             } else {
-              const st = this.stations.find((s) => s.id === stId);
+              const st = this.stations.find((s) => s.id === stId) || this.routeStations.find((s) => s.id === stId);
               if (st) await this.setHomeStation(st);
             }
           }
@@ -522,6 +536,104 @@ class ZapfyApp {
     if (btnClearHistory) {
       btnClearHistory.addEventListener('click', () => this.handleClearHistory());
     }
+
+    // Route Corridor Bar & Planner Bottom-Sheet
+    const btnOpenRouteSheet = document.getElementById('btnOpenRouteSheet');
+    if (btnOpenRouteSheet) {
+      btnOpenRouteSheet.addEventListener('click', () => this.openRouteSheet());
+    }
+
+    const btnCloseRouteSheet = document.getElementById('btnCloseRouteSheet');
+    if (btnCloseRouteSheet) {
+      btnCloseRouteSheet.addEventListener('click', () => this.closeRouteSheet());
+    }
+
+    const routeBackdrop = document.getElementById('routeSheetBackdrop');
+    if (routeBackdrop) {
+      routeBackdrop.addEventListener('click', (e) => {
+        if (e.target === routeBackdrop) {
+          this.closeRouteSheet();
+        }
+      });
+    }
+
+    const btnPasteQuick = document.getElementById('btnPasteRouteQuick');
+    if (btnPasteQuick) {
+      btnPasteQuick.addEventListener('click', () => this.handlePasteRouteFromClipboard({ fromSheet: false }));
+    }
+
+    const btnPasteSheet = document.getElementById('btnPasteRouteInSheet');
+    if (btnPasteSheet) {
+      btnPasteSheet.addEventListener('click', () => this.handlePasteRouteFromClipboard({ fromSheet: true }));
+    }
+
+    const btnClearRoute = document.getElementById('btnClearRoute');
+    if (btnClearRoute) {
+      btnClearRoute.addEventListener('click', () => this.clearActiveRoute());
+    }
+
+    const btnRecalcRoute = document.getElementById('btnRecalcRoute');
+    if (btnRecalcRoute) {
+      btnRecalcRoute.addEventListener('click', () => {
+        if (this.activeRoute && this.activeRoute.dest) {
+          this.planRouteToDestination(this.activeRoute.dest, { forceRefresh: true });
+        }
+      });
+    }
+
+    const routeSearchForm = document.getElementById('routeSearchForm');
+    if (routeSearchForm) {
+      routeSearchForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const inputEl = document.getElementById('routeDestInput');
+        const val = inputEl ? inputEl.value : '';
+        await this.planRouteFromInput(val);
+      });
+    }
+
+    document.querySelectorAll('.route-corridor-pill[data-corridor]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const val = Number(btn.getAttribute('data-corridor')) === 6 ? 6.0 : 3.0;
+        this.routeCorridorKm = val;
+        document.querySelectorAll('.route-corridor-pill[data-corridor]').forEach((b) => {
+          b.classList.toggle('active', Number(b.getAttribute('data-corridor')) === val);
+        });
+        await db.setSetting('routeCorridorKm', val);
+        if (this.activeRoute) {
+          this.reapplyRouteCorridorFilter();
+          this.renderAll();
+          this.showToast(`Korridor auf ≤ ${val} km umgestellt (${this.routeStations.length} Stationen)`);
+        }
+      });
+    });
+
+    const btnSaveFav = document.getElementById('btnSaveCurrentRouteFav');
+    if (btnSaveFav) {
+      btnSaveFav.addEventListener('click', () => this.saveCurrentRouteAsFavorite());
+    }
+
+    const handleChipContainerClick = async (e) => {
+      const delBtn = e.target.closest('.route-chip-del[data-fav-id]');
+      if (delBtn) {
+        const id = delBtn.getAttribute('data-fav-id');
+        if (id) await this.deleteRouteFavorite(id);
+        return;
+      }
+      const chipBtn = e.target.closest('.route-chip-btn[data-lat][data-lng]');
+      if (chipBtn) {
+        const lat = Number(chipBtn.getAttribute('data-lat'));
+        const lng = Number(chipBtn.getAttribute('data-lng'));
+        const label = chipBtn.getAttribute('data-label') || 'Ziel';
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          await this.planRouteToDestination({ lat, lng, label });
+        }
+      }
+    };
+
+    const favListEl = document.getElementById('routeFavoritesList');
+    if (favListEl) favListEl.addEventListener('click', handleChipContainerClick);
+    const recentListEl = document.getElementById('routeRecentList');
+    if (recentListEl) recentListEl.addEventListener('click', handleChipContainerClick);
   }
 
   initSwipeNavigation() {
@@ -789,13 +901,37 @@ class ZapfyApp {
       updatedAt: new Date()
     };
 
+    // Live-GPS Fusion when a driving route is active
+    if (this.activeRoute) {
+      const distToDestKm = FuelApiService.calculateDistanceKm(
+        coords.lat,
+        coords.lng,
+        this.activeRoute.dest.lat,
+        this.activeRoute.dest.lng
+      );
+      if (distToDestKm <= 0.5) {
+        this.activeRoute = null;
+        this.routeRawStations = [];
+        this.routeStations = [];
+        this.skippedStationIds.clear();
+        this.showToast('🏁 Ziel erreicht – Umkreis-Radar wieder aktiv');
+        this.renderAll();
+      } else {
+        const proj = RouteService.projectPointOntoRoute(coords.lat, coords.lng, this.activeRoute);
+        this.activeRoute.currentAlongRouteKm = proj.alongRouteKm;
+        this.activeRoute.offRouteKm = proj.corridorDistKm;
+      }
+    }
+
     // Stufe 1: Zero-Cost Local UI Update (re-evaluates live distances & ahead/behind status, max every 2.5s)
     const now = Date.now();
     if (now - this.lastLocalUiUpdateMs >= 2500) {
       this.lastLocalUiUpdateMs = now;
       const timeStr = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
       const fuelShort = FUEL_LABELS[this.fuelType] || 'E10';
-      const routeHint = this.currentLocation.headingDeg !== null ? ' · Route' : '';
+      const routeHint = this.activeRoute
+        ? ' · Zielroute'
+        : (this.currentLocation.headingDeg !== null ? ' · Route' : '');
       this.updateGpsToolbarStatus('ready', `${fuelShort}${routeHint} · ${timeStr}`);
       this.renderAll();
     }
@@ -805,7 +941,7 @@ class ZapfyApp {
   }
 
   async evaluateAutoApiRefetch(coords) {
-    if (this.isFetching) return;
+    if (this.isFetching || this.activeRoute) return;
 
     if (!this.lastFetchLocation) {
       this.lastFetchLocation = {
@@ -900,7 +1036,7 @@ class ZapfyApp {
    */
   async loadAndCacheStationOpeningHours(stationId, { userInitiated = false } = {}) {
     let existing = this.stationDetailsMap.get(stationId);
-    const stationObj = this.stations.find((s) => s.id === stationId);
+    const stationObj = this.stations.find((s) => s.id === stationId) || this.routeStations.find((s) => s.id === stationId);
     const isClosed = Boolean(stationObj && !stationObj.isOpen);
 
     // Auto-repair cached details lacking openingLabel
@@ -965,9 +1101,59 @@ class ZapfyApp {
   }
 
   /**
-   * Formats the quiet open/closed indicator for a station card (`● Offen (24h)` / `● Bis 22:00` vs `○ Öffnet 08:00` / `○ Geschlossen`).
+   * Formats the open/closed indicator for a station card.
+   * For active route stations, evaluates against the estimated arrival time (ETA).
    */
-  formatOpenStatusHtml(st) {
+  formatOpenStatusHtml(st, { compact = false } = {}) {
+    if (st && st.isRouteStation && st.etaTimeLabel) {
+      const status = st.arrivalOpenStatus;
+      const eta = this.escapeHtml(st.etaTimeLabel);
+      const closeTime = this.escapeHtml(st.arrivalClosingLabel || '');
+      const openTime = this.escapeHtml(st.arrivalOpeningLabel || '');
+
+      if (status === 'closed_at_arrival' || status === 'closing_imminent') {
+        if (compact) {
+          return `<span class="meta-status-closed">⚠ Zu ~${eta}</span>`;
+        }
+        return closeTime && closeTime !== '24h'
+          ? `<span class="meta-status-closed">⚠ Zu bei ~${eta} (bis ${closeTime})</span>`
+          : `<span class="meta-status-closed">⚠ Zu bei Ankunft (~${eta})</span>`;
+      }
+
+      if (status === 'tight') {
+        return compact
+          ? `<span class="meta-status-tight">⚠ ${closeTime}</span>`
+          : `<span class="meta-status-tight">⚠ Knapp · bis ${closeTime} (~${eta})</span>`;
+      }
+
+      if (status === 'open_24h') {
+        return compact
+          ? '<span class="meta-status-open" title="24h geöffnet">●</span>'
+          : '<span class="meta-status-open">● Offen (24h)</span>';
+      }
+
+      if (status === 'open') {
+        if (compact) {
+          return '<span class="meta-status-open" title="Bei Ankunft geöffnet">●</span>';
+        }
+        if (!st.isOpen && openTime && openTime !== '24h') {
+          return `<span class="meta-status-open">● Ab ${openTime} offen (~${eta})</span>`;
+        }
+        return closeTime
+          ? `<span class="meta-status-open">● Bis ${closeTime} (~${eta})</span>`
+          : `<span class="meta-status-open">● Offen (~${eta})</span>`;
+      }
+
+      if (!st.isOpen) {
+        return compact
+          ? '<span class="meta-status-closed">○ Zu</span>'
+          : `<span class="meta-status-closed">○ Aktuell zu (Ankunft ~${eta})</span>`;
+      }
+      return compact
+        ? '<span class="meta-status-open" title="Geöffnet">●</span>'
+        : `<span class="meta-status-open">● Offen (~${eta})</span>`;
+    }
+
     const detail = this.stationDetailsMap.get(st.id);
     let openingLabel = detail?.openingLabel;
     let closingLabel = detail?.closingLabel;
@@ -987,11 +1173,18 @@ class ZapfyApp {
     }
 
     if (!st.isOpen) {
+      if (compact) {
+        return '<span class="meta-status-closed">○ Zu</span>';
+      }
       const effectiveOpen = (openingLabel && openingLabel !== '24h') ? openingLabel : (st.id === 'sim-bft-04' ? '07:30' : '08:00');
       if (effectiveOpen) {
         return `<span class="meta-status-closed">○ Öffnet ${this.escapeHtml(effectiveOpen)}</span>`;
       }
       return `<span class="meta-status-closed">○ Geschlossen</span>`;
+    }
+
+    if (compact) {
+      return '<span class="meta-status-open" title="Geöffnet">●</span>';
     }
 
     if (closingLabel) {
@@ -1005,13 +1198,12 @@ class ZapfyApp {
 
   updateGpsToolbarStatus(stateOrIcon, text) {
     const btnEl = document.getElementById('btnRefreshGps');
-    const textEl = document.getElementById('gpsStatusText');
     const isLocating = stateOrIcon === '⏳' || stateOrIcon === 'loading';
     if (btnEl) {
       btnEl.classList.toggle('is-locating', isLocating);
-    }
-    if (textEl && text) {
-      textEl.textContent = text;
+      if (text) {
+        btnEl.title = `GPS-Standort & Preise aktualisieren (${text})`;
+      }
     }
   }
 
@@ -1152,18 +1344,8 @@ class ZapfyApp {
     this.showToast(skipsReset ? 'Alle Tankstellen wieder eingeblendet' : 'Nächste Tankstelle ausgewählt');
   }
 
-  renderSavingsBadge({ bump = false } = {}) {
+  renderSavingsBadge() {
     const totalStr = `${this.savingsTotal.toFixed(2).replace('.', ',')} €`;
-    const headerEl = document.getElementById('headerSavingsTotal');
-    if (headerEl) headerEl.textContent = totalStr;
-
-    const pillEl = document.getElementById('btnSavingsBadge');
-    if (pillEl && bump) {
-      pillEl.classList.remove('is-bumping');
-      void pillEl.offsetWidth;
-      pillEl.classList.add('is-bumping');
-    }
-
     const statsTotalEl = document.getElementById('statsSavingsTotal');
     const statsAvgEl = document.getElementById('statsSavingsAvg');
     const statsCountEl = document.getElementById('statsFillCountHint');
@@ -1187,7 +1369,19 @@ class ZapfyApp {
     if (actionsRow) actionsRow.hidden = !canUndo && !canReset;
   }
 
+  formatRouteAheadDist(km, { compact = false } = {}) {
+    const rem = Math.max(0, Number(km) || 0);
+    if (rem < 0.8) return compact ? 'jetzt' : 'jetzt voraus';
+    if (rem < 10) return `in ${rem.toFixed(1).replace('.', ',')} km`;
+    return `in ${Math.round(rem)} km`;
+  }
+
   buildDistArrowHtml(st, { size = 13 } = {}) {
+    if (st && st.isRouteStation) {
+      const remLabel = this.formatRouteAheadDist(st.remainingAlongRouteKm ?? st.dist, { compact: false });
+      const etaSuffix = st.etaTimeLabel && st.etaMinutes >= 5 ? ` (~${this.escapeHtml(st.etaTimeLabel)})` : '';
+      return `<span class="meta-route-km">${remLabel}${etaSuffix}</span>`;
+    }
     const distRawStr = `${st.dist.toFixed(1).replace('.', ',')} km`;
     if (typeof st.relBearingDeg !== 'number') {
       return `<span>${distRawStr}</span>`;
@@ -1198,9 +1392,28 @@ class ZapfyApp {
 
   // --- Rendering ---
 
-  renderAll() {
-    let skipsReset = false;
-    let ranking = PriceEngine.rankStations(
+  computeActiveRanking() {
+    if (this.activeRoute) {
+      return PriceEngine.rankRouteStations(
+        this.routeStations,
+        this.fuelType,
+        this.sortMode,
+        this.favoritesSet,
+        this.config.tankVolume,
+        this.config.consumption,
+        {
+          currentAlongRouteKm: this.activeRoute.currentAlongRouteKm || 0,
+          totalRouteKm: this.activeRoute.distanceKm || 0,
+          totalDurationMin: this.activeRoute.durationMin || 0,
+          stationDetailsMap: this.stationDetailsMap,
+          now: new Date(),
+          showAll: this.showAllStations,
+          skippedIds: this.skippedStationIds
+        }
+      );
+    }
+
+    return PriceEngine.rankStations(
       this.stations,
       this.fuelType,
       this.sortMode,
@@ -1210,23 +1423,20 @@ class ZapfyApp {
       this.config.consumption,
       this.getTravelContext()
     );
+  }
+
+  renderAll() {
+    let skipsReset = false;
+    let ranking = this.computeActiveRanking();
 
     if (ranking.list.length === 0 && this.skippedStationIds.size > 0 && ranking.totalRelevantCount > 0) {
       this.skippedStationIds.clear();
       skipsReset = true;
-      ranking = PriceEngine.rankStations(
-        this.stations,
-        this.fuelType,
-        this.sortMode,
-        this.favoritesSet,
-        this.radiusKm,
-        this.config.tankVolume,
-        this.config.consumption,
-        this.getTravelContext()
-      );
+      ranking = this.computeActiveRanking();
     }
 
-    const nearbyIds = new Set(this.stations.map((s) => s.id));
+    const activeSourceStations = this.activeRoute ? this.routeStations : this.stations;
+    const nearbyIds = new Set(activeSourceStations.map((s) => s.id));
     const localSnapshots = nearbyIds.size > 0
       ? this.snapshots.filter((s) => nearbyIds.has(s.station_id))
       : this.snapshots;
@@ -1244,7 +1454,7 @@ class ZapfyApp {
     if (listEl) listEl.hidden = this.hudMode;
     if (hudEl) hudEl.hidden = !this.hudMode;
 
-    this.renderRadarForecastBar(forecast);
+    this.renderRouteBar();
     this.renderSavingsBadge();
     this.renderHomeRefBanner();
     this.renderStationsList(ranking);
@@ -1252,25 +1462,6 @@ class ZapfyApp {
     this.renderForecastAndStatsTab(ranking, forecast);
     this.renderHomeStationSetup();
     return { skipsReset };
-  }
-
-  renderRadarForecastBar(forecast) {
-    const barEl = document.getElementById('btnRadarForecastBar');
-    const textEl = document.getElementById('radarForecastText');
-    const metaEl = document.getElementById('radarForecastMeta');
-    if (!barEl || !textEl || !metaEl) return;
-
-    barEl.className = `radar-forecast-bar signal-${forecast.signal}`;
-    textEl.textContent = forecast.headline;
-
-    if (forecast.signal === 'wait' && forecast.potentialEveningSaving >= 0.5) {
-      const savStr = forecast.potentialEveningSaving.toFixed(2).replace('.', ',');
-      metaEl.textContent = `Abends −${savStr} € ›`;
-    } else if (forecast.signal === 'optimal') {
-      metaEl.textContent = `Bestzeit ›`;
-    } else {
-      metaEl.textContent = `18–20h ›`;
-    }
   }
 
   getHomeComparison(st) {
@@ -1320,16 +1511,23 @@ class ZapfyApp {
 
   buildHeroStationHtml(st, ranking, isWinner) {
     const priceFmt = PriceEngine.formatPriceParts(st.activePrice);
-    const gmaps = FuelApiService.getGoogleMapsLinks(st);
+    const routeDest = this.activeRoute ? this.activeRoute.dest : null;
+    const gmaps = FuelApiService.getGoogleMapsLinks(st, routeDest);
     const placeStr = st.place || (st.street ? st.street : 'In der Nähe');
     const distHtml = this.buildDistArrowHtml(st, { size: 14 });
     const openStatusHtml = this.formatOpenStatusHtml(st);
     const savingGain = this.computeStationSavingGain(st);
     const savingStr = savingGain.toFixed(2).replace('.', ',');
 
+    const isOpenEffective = st.isRouteStation ? Boolean(st.effectiveOpenAtArrival) : Boolean(st.isOpen);
     let dealBadgeText = '★ Top-Empfehlung';
     let dealNeutral = false;
-    if (st.isWorthwhileDetour && st.netSavingVsNearest > 0) {
+    if (st.isRouteStation && !isOpenEffective) {
+      dealBadgeText = `⚠ Bei Ankunft zu (~${st.etaTimeLabel || ''})`;
+      dealNeutral = true;
+    } else if (st.isRouteStation && isWinner && savingGain > 0.25) {
+      dealBadgeText = `🛣️ Top-Stopp · −${savingStr} €`;
+    } else if (st.isWorthwhileDetour && st.netSavingVsNearest > 0) {
       dealBadgeText = `⚡ Bester Deal · −${st.netSavingVsNearest.toFixed(2).replace('.', ',')} € netto`;
     } else if (st.isNearestOpen && st.diffToBestNet <= 0.15) {
       dealBadgeText = '⚡ Nächste · Optimal';
@@ -1341,12 +1539,21 @@ class ZapfyApp {
     }
 
     const statusItems = [];
-    if (st.routeStatus === 'ahead') {
-      statusItems.push(`<span class="meta-route-ahead">Auf Route</span>`);
-    }
-    statusItems.push(`<span>${this.escapeHtml(placeStr)}</span>`);
-    if (st.extraDistOneWay >= 0.5 && st.isWorthwhileDetour) {
-      statusItems.push(`<span class="meta-worthwhile">+${st.extraDistOneWay.toFixed(1).replace('.', ',')} km Umweg</span>`);
+    if (st.isRouteStation) {
+      if (Number(st.corridorDistKm) <= 0.4) {
+        statusItems.push('<span class="meta-route-ahead">Direkt an Route</span>');
+      } else {
+        statusItems.push(`<span class="meta-worthwhile">+${Number(st.corridorDistKm).toFixed(1).replace('.', ',')} km Umweg</span>`);
+      }
+      statusItems.push(`<span>${this.escapeHtml(placeStr)}</span>`);
+    } else {
+      if (st.routeStatus === 'ahead') {
+        statusItems.push('<span class="meta-route-ahead">Auf Route</span>');
+      }
+      statusItems.push(`<span>${this.escapeHtml(placeStr)}</span>`);
+      if (st.extraDistOneWay >= 0.5 && st.isWorthwhileDetour) {
+        statusItems.push(`<span class="meta-worthwhile">+${st.extraDistOneWay.toFixed(1).replace('.', ',')} km Umweg</span>`);
+      }
     }
     const statusLineHtml = statusItems.join('<span class="meta-dot">·</span>');
 
@@ -1355,12 +1562,16 @@ class ZapfyApp {
       : '✓ Hier getankt';
     const isHomeSt = Boolean(this.homeStation && this.homeStation.id === st.id);
     const homeDeltaHtml = this.buildHomeDeltaBadgeHtml(st, { compact: false });
+    const routeCtaText = gmaps.isRouteWaypoint ? 'Route + Stopp' : 'Route starten';
+    const routeCtaTitle = gmaps.isRouteWaypoint
+      ? 'Google Maps mit Ziel + dieser Tankstelle als Zwischenstopp öffnen'
+      : 'Direkt in Google Maps dorthin navigieren';
 
     return `
-      <article class="station-card is-hero ${isWinner ? 'is-winner' : ''} ${!st.isOpen ? 'is-closed' : ''}" data-station-id="${this.escapeHtml(st.id)}" title="Antippen, um genaue Schließzeit zu prüfen">
+      <article class="station-card is-hero ${isWinner ? 'is-winner' : ''} ${!isOpenEffective ? 'is-closed' : ''}" data-station-id="${this.escapeHtml(st.id)}" title="Antippen, um genaue Schließzeit zu prüfen">
         <div class="hero-badge-row">
           <span class="hero-deal-pill ${dealNeutral ? 'is-neutral' : ''}">${dealBadgeText}</span>
-          <span class="hero-open-label ${!st.isOpen ? 'is-closed' : ''}">${openStatusHtml}</span>
+          <span class="hero-open-label ${!isOpenEffective ? 'is-closed' : ''}">${openStatusHtml}</span>
         </div>
 
         <div class="station-top-row">
@@ -1385,11 +1596,11 @@ class ZapfyApp {
         </div>
 
         <div class="station-actions-row">
-          <a href="${gmaps.navigateUrl}" target="_blank" rel="noopener noreferrer" class="btn-gmaps-route" title="Direkt in Google Maps dorthin navigieren">
+          <a href="${gmaps.navigateUrl}" target="_blank" rel="noopener noreferrer" class="btn-gmaps-route" title="${routeCtaTitle}">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
               <polygon points="3 11 22 2 13 21 11 13 3 11"></polygon>
             </svg>
-            <span>Route starten</span>
+            <span>${routeCtaText}</span>
           </a>
 
           <button type="button" class="btn-home-toggle ${isHomeSt ? 'is-active' : ''}" data-station-id="${this.escapeHtml(st.id)}" title="${isHomeSt ? 'Als Haus-und-Hof-Tankstelle entfernen' : 'Als Haus-und-Hof-Tankstelle festlegen'}" aria-label="Als Stamm-Tankstelle festlegen">
@@ -1418,11 +1629,14 @@ class ZapfyApp {
 
   buildAltStationHtml(st) {
     const priceFmt = PriceEngine.formatPriceParts(st.activePrice);
-    const gmaps = FuelApiService.getGoogleMapsLinks(st);
-    const openStatusHtml = this.formatOpenStatusHtml(st);
-    const distStr = `${st.dist.toFixed(1).replace('.', ',')} km`;
+    const routeDest = this.activeRoute ? this.activeRoute.dest : null;
+    const gmaps = FuelApiService.getGoogleMapsLinks(st, routeDest);
+    const openStatusHtml = this.formatOpenStatusHtml(st, { compact: Boolean(st.isRouteStation) });
+    const distStr = st.isRouteStation
+      ? this.formatRouteAheadDist(st.remainingAlongRouteKm ?? st.dist, { compact: true })
+      : `${st.dist.toFixed(1).replace('.', ',')} km`;
     const arrowDeg = typeof st.relBearingDeg === 'number' ? st.relBearingDeg : 0;
-    const hasArrow = typeof st.relBearingDeg === 'number';
+    const hasArrow = !st.isRouteStation && typeof st.relBearingDeg === 'number';
 
     let deltaHtml = '';
     if (this.sortMode === 'smart' && st.diffToBestNet > 0.15) {
@@ -1435,15 +1649,23 @@ class ZapfyApp {
     const isHomeSt = Boolean(this.homeStation && this.homeStation.id === st.id);
     const homeDeltaHtml = this.buildHomeDeltaBadgeHtml(st, { compact: true });
 
+    const detourBadge = st.isRouteStation
+      ? (Number(st.corridorDistKm) <= 0.4
+        ? '<span class="meta-route-ahead">Direkt</span>'
+        : `<span class="meta-route-detour">+${Number(st.corridorDistKm).toFixed(1).replace('.', ',')} km</span>`)
+      : (st.routeStatus === 'ahead' ? '<span class="meta-route-ahead">Route</span>' : '');
+
     const metaHtml = [
       `<span>${distStr}</span>`,
       openStatusHtml,
-      st.routeStatus === 'ahead' ? `<span class="meta-route-ahead">Route</span>` : '',
+      detourBadge,
       deltaHtml
     ].filter(Boolean).join('<span class="meta-dot">·</span>');
 
+    const isOpenEffective = st.isRouteStation ? Boolean(st.effectiveOpenAtArrival) : Boolean(st.isOpen);
+
     return `
-      <div class="station-alt-card ${!st.isOpen ? 'is-closed' : ''}" data-station-id="${this.escapeHtml(st.id)}" title="Antippen für genaue Öffnungszeiten">
+      <div class="station-alt-card ${!isOpenEffective ? 'is-closed' : ''}" data-station-id="${this.escapeHtml(st.id)}" title="Antippen für genaue Öffnungszeiten">
         <div class="alt-dir-box">
           ${hasArrow
             ? `<svg class="route-dir-svg ${st.routeStatus === 'ahead' ? 'is-ahead' : ''}" style="transform:rotate(${arrowDeg}deg)" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>`
@@ -1465,7 +1687,7 @@ class ZapfyApp {
             <span class="alt-price-tenths">${priceFmt.tenths}</span>
           </div>
           <button type="button" class="btn-home-toggle is-compact ${isHomeSt ? 'is-active' : ''}" data-station-id="${this.escapeHtml(st.id)}" title="${isHomeSt ? 'Stamm-Tankstelle entfernen' : 'Als Stamm-Tankstelle festlegen'}" aria-label="Stamm-Tankstelle festlegen">🏠</button>
-          <a href="${gmaps.navigateUrl}" target="_blank" rel="noopener noreferrer" class="btn-alt-route" title="Route zu ${this.escapeHtml(st.brand || st.name)} starten" aria-label="Route starten">
+          <a href="${gmaps.navigateUrl}" target="_blank" rel="noopener noreferrer" class="btn-alt-route" title="${gmaps.isRouteWaypoint ? 'Route + Zwischenstopp in Maps starten' : `Route zu ${this.escapeHtml(st.brand || st.name)} starten`}" aria-label="Route starten">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
               <polygon points="3 11 22 2 13 21 11 13 3 11"></polygon>
             </svg>
@@ -1480,7 +1702,14 @@ class ZapfyApp {
     if (!container) return;
 
     if (!ranking.list || ranking.list.length === 0) {
-      container.innerHTML = `
+      container.innerHTML = this.activeRoute
+        ? `
+        <div class="empty-state">
+          Keine Tankstelle im ${this.routeCorridorKm}-km-Korridor entlang der Route gefunden.<br>
+          Tipp: Tippe oben auf die Route und wähle <strong>≤ 6 km</strong>.
+        </div>
+      `
+        : `
         <div class="empty-state">
           Aktuell keine Tankstellen im erweiterten Suchkorridor gefunden.<br>
           Tippe unten rechts auf das GPS-Symbol zum Aktualisieren.
@@ -1490,20 +1719,22 @@ class ZapfyApp {
     }
 
     const hero = ranking.list[0];
+    const heroOpen = hero.isRouteStation ? Boolean(hero.effectiveOpenAtArrival) : Boolean(hero.isOpen);
     const isHeroWinner =
       this.sortMode === 'smart'
-        ? Boolean(hero.isBestSmart && hero.isOpen)
+        ? Boolean(hero.isBestSmart && heroOpen)
         : this.sortMode === 'price'
-          ? Boolean(hero.isCheapest && hero.isOpen)
-          : Boolean(hero.isOpen && (hero.isBestSmart || hero.isCheapest));
+          ? Boolean(hero.isCheapest && heroOpen)
+          : Boolean(heroOpen && (hero.isBestSmart || hero.isCheapest));
 
     const parts = [this.buildHeroStationHtml(hero, ranking, isHeroWinner)];
 
     const alts = ranking.list.slice(1);
     if (alts.length > 0 || this.skippedStationIds.size > 0) {
+      const sectionTitle = this.activeRoute ? 'Weitere Tankstopps auf deiner Route' : 'Weitere auf deiner Strecke';
       parts.push(`
         <div class="alt-section-header">
-          <span class="alt-section-title">Weitere auf deiner Strecke</span>
+          <span class="alt-section-title">${sectionTitle}</span>
           ${this.skippedStationIds.size > 0 ? '<button type="button" class="btn-reset-skips" id="btnResetSkips">Alle wieder zeigen</button>' : ''}
         </div>
       `);
@@ -1542,13 +1773,19 @@ class ZapfyApp {
     }
 
     const priceFmt = PriceEngine.formatPriceParts(hero.activePrice);
-    const gmaps = FuelApiService.getGoogleMapsLinks(hero);
+    const routeDest = this.activeRoute ? this.activeRoute.dest : null;
+    const gmaps = FuelApiService.getGoogleMapsLinks(hero, routeDest);
     const arrowDeg = typeof hero.relBearingDeg === 'number' ? hero.relBearingDeg : 0;
-    const distStr = `${hero.dist.toFixed(1).replace('.', ',')} km`;
+    const distStr = hero.isRouteStation
+      ? `${this.formatRouteAheadDist(hero.remainingAlongRouteKm ?? hero.dist, { compact: false })}${hero.etaTimeLabel && hero.etaMinutes >= 5 ? ` (~${hero.etaTimeLabel})` : ''}`
+      : `${hero.dist.toFixed(1).replace('.', ',')} km`;
     const placeStr = hero.place || (hero.street ? hero.street : '');
-    const routeText = hero.routeStatus === 'ahead' ? 'Auf Route voraus' : (placeStr || 'Im Korridor');
+    const routeText = hero.isRouteStation
+      ? (Number(hero.corridorDistKm) <= 0.4 ? 'Direkt an Route' : `+${Number(hero.corridorDistKm).toFixed(1).replace('.', ',')} km Umweg`)
+      : (hero.routeStatus === 'ahead' ? 'Auf Route voraus' : (placeStr || 'Im Korridor'));
     const savingGain = this.computeStationSavingGain(hero);
     const openStatusHtml = this.formatOpenStatusHtml(hero);
+    const hudMainCta = gmaps.isRouteWaypoint ? 'ROUTE + STOPP' : 'NAVIGATION STARTEN';
 
     hudEl.innerHTML = `
       <div class="drive-hud-card">
@@ -1582,7 +1819,7 @@ class ZapfyApp {
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
               <polygon points="3 11 22 2 13 21 11 13 3 11"></polygon>
             </svg>
-            <span>NAVIGATION STARTEN</span>
+            <span>${hudMainCta}</span>
           </a>
 
           <div class="hud-secondary-row">
@@ -1768,6 +2005,314 @@ class ZapfyApp {
     }
   }
 
+  // --- Route Corridor & Google Maps Handover ---
+
+  async handleIncomingDestinationParams() {
+    if (typeof window === 'undefined' || !window.location.search) return;
+    const params = new URLSearchParams(window.location.search);
+    const dest = params.get('dest') || params.get('q') || '';
+    const shareTitle = params.get('share_title') || '';
+    const shareText = params.get('share_text') || '';
+    const shareUrl = params.get('share_url') || '';
+
+    if (!dest && !shareTitle && !shareText && !shareUrl) return;
+
+    try {
+      window.history.replaceState({}, '', window.location.pathname);
+    } catch {
+      // Ignore history restriction
+    }
+
+    const primaryInput = dest || shareText || shareUrl || shareTitle;
+    await this.planRouteFromInput(primaryInput, { title: shareTitle, url: shareUrl });
+  }
+
+  openRouteSheet() {
+    const backdrop = document.getElementById('routeSheetBackdrop');
+    if (!backdrop) return;
+    this.renderRouteSheetLists();
+    backdrop.hidden = false;
+    const input = document.getElementById('routeDestInput');
+    if (input) {
+      setTimeout(() => input.focus(), 60);
+    }
+  }
+
+  closeRouteSheet() {
+    const backdrop = document.getElementById('routeSheetBackdrop');
+    if (backdrop) {
+      backdrop.hidden = true;
+    }
+  }
+
+  formatDurationLabel(minutes) {
+    const mins = Math.max(1, Math.round(Number(minutes) || 0));
+    if (mins < 60) return `${mins} min`;
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return `${h}h ${String(m).padStart(2, '0')}m`;
+  }
+
+  renderRouteBar() {
+    const bar = document.getElementById('routeBar');
+    const textEl = document.getElementById('routeBarText');
+    const metaEl = document.getElementById('routeBarMeta');
+    const clearBtn = document.getElementById('btnClearRoute');
+    const recalcBtn = document.getElementById('btnRecalcRoute');
+    if (!bar || !textEl || !metaEl) return;
+
+    if (!this.activeRoute) {
+      bar.classList.remove('is-active');
+      textEl.textContent = 'Tankstopp auf Route planen…';
+      metaEl.textContent = 'Ziel ›';
+      if (clearBtn) clearBtn.hidden = true;
+      if (recalcBtn) recalcBtn.hidden = true;
+      return;
+    }
+
+    const r = this.activeRoute;
+    const remKm = Math.max(0, Math.round((r.distanceKm || 0) - (r.currentAlongRouteKm || 0)));
+    const distLabel = r.currentAlongRouteKm >= 1 ? `${remKm} km Rest` : `${Math.round(r.distanceKm)} km`;
+    bar.classList.add('is-active');
+    textEl.textContent = `Nach ${r.dest.label}`;
+    metaEl.textContent = `${distLabel} · ${this.formatDurationLabel(r.durationMin)}`;
+    if (clearBtn) clearBtn.hidden = false;
+    if (recalcBtn) recalcBtn.hidden = (r.offRouteKm || 0) < 3.0;
+  }
+
+  renderRouteSheetLists() {
+    const saveFavBtn = document.getElementById('btnSaveCurrentRouteFav');
+    if (saveFavBtn) {
+      const alreadySaved = this.activeRoute && this.routeFavorites.some(
+        (f) => Math.abs(f.lat - this.activeRoute.dest.lat) < 0.002 && Math.abs(f.lng - this.activeRoute.dest.lng) < 0.002
+      );
+      saveFavBtn.hidden = !this.activeRoute || alreadySaved;
+    }
+
+    const favEl = document.getElementById('routeFavoritesList');
+    if (favEl) {
+      if (this.routeFavorites.length === 0) {
+        favEl.innerHTML = '<span class="route-chip-empty">Noch keine Schnellziele gespeichert. Starte eine Route und tippe auf „+ Aktuelles Ziel merken“.</span>';
+      } else {
+        favEl.innerHTML = this.routeFavorites.map((fav) => `
+          <div class="route-chip-wrap">
+            <button type="button" class="route-chip-btn" data-lat="${fav.lat}" data-lng="${fav.lng}" data-label="${this.escapeHtml(fav.label)}">
+              <span>${this.escapeHtml(fav.icon || '📍')}</span>
+              <span>${this.escapeHtml(fav.label)}</span>
+            </button>
+            <button type="button" class="route-chip-del" data-fav-id="${this.escapeHtml(fav.id)}" aria-label="Schnellziel löschen" title="Entfernen">✕</button>
+          </div>
+        `).join('');
+      }
+    }
+
+    const recentSection = document.getElementById('routeRecentSection');
+    const recentEl = document.getElementById('routeRecentList');
+    if (recentSection && recentEl) {
+      if (this.recentDestinations.length === 0) {
+        recentSection.hidden = true;
+        recentEl.innerHTML = '';
+      } else {
+        recentSection.hidden = false;
+        recentEl.innerHTML = this.recentDestinations.map((rec) => `
+          <div class="route-chip-wrap">
+            <button type="button" class="route-chip-btn" data-lat="${rec.lat}" data-lng="${rec.lng}" data-label="${this.escapeHtml(rec.label)}">
+              <span>🕒</span>
+              <span>${this.escapeHtml(rec.label)}</span>
+            </button>
+          </div>
+        `).join('');
+      }
+    }
+  }
+
+  async handlePasteRouteFromClipboard({ fromSheet = false } = {}) {
+    if (!navigator.clipboard || typeof navigator.clipboard.readText !== 'function') {
+      if (!fromSheet) this.openRouteSheet();
+      this.showToast('Bitte Google-Maps-Link oder Ziel ins Feld einfügen');
+      return;
+    }
+
+    try {
+      const clipText = (await navigator.clipboard.readText()).trim();
+      if (!clipText) {
+        if (!fromSheet) this.openRouteSheet();
+        this.showToast('Zwischenablage ist leer');
+        return;
+      }
+      const inputEl = document.getElementById('routeDestInput');
+      if (inputEl) inputEl.value = clipText;
+      await this.planRouteFromInput(clipText);
+    } catch {
+      if (!fromSheet) this.openRouteSheet();
+      this.showToast('Bitte Link oder Ziel ins Feld einfügen');
+    }
+  }
+
+  async planRouteFromInput(rawInput, shareMeta = {}) {
+    if (this.isPlanningRoute) return;
+    const submitBtn = document.getElementById('btnPlanRouteSubmit');
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Lädt…';
+    }
+
+    try {
+      const dest = await RouteService.resolveDestination(rawInput, shareMeta, {
+        shortlinkResolverUrl: this.config.shortlinkResolverUrl
+      });
+      await this.planRouteToDestination(dest);
+    } catch (err) {
+      this.showToast(err.message || 'Ziel konnte nicht aufgelöst werden', { durationMs: 5500 });
+      const inputEl = document.getElementById('routeDestInput');
+      if (inputEl) {
+        if (!inputEl.value && rawInput) inputEl.value = String(rawInput);
+        this.openRouteSheet();
+      }
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Start';
+      }
+    }
+  }
+
+  async planRouteToDestination(dest, { forceRefresh = false } = {}) {
+    if (this.isPlanningRoute) return;
+    this.isPlanningRoute = true;
+
+    const submitBtn = document.getElementById('btnPlanRouteSubmit');
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Route…';
+    }
+
+    try {
+      const start = {
+        lat: this.currentLocation.lat,
+        lng: this.currentLocation.lng
+      };
+
+      const route = await RouteService.fetchDrivingRoute(start, dest);
+      const corridorRes = await RouteService.fetchRouteCorridorStations(route, {
+        apiKey: this.config.apiKey,
+        demoMode: this.config.demoMode,
+        forceRefresh
+      });
+
+      this.activeRoute = {
+        ...route,
+        currentAlongRouteKm: 0,
+        offRouteKm: 0
+      };
+      this.routeRawStations = corridorRes.stations || [];
+      this.skippedStationIds.clear();
+      this.showAllStations = false;
+
+      if (corridorRes.source === 'demo' || !this.config.apiKey) {
+        for (const st of this.routeRawStations) {
+          if (!this.stationDetailsMap.has(st.id) && String(st.id).startsWith('sim-')) {
+            this.stationDetailsMap.set(st.id, FuelApiService.getSimulatedDetail(st.id));
+          }
+        }
+      }
+
+      const filterInfo = this.reapplyRouteCorridorFilter();
+      await this.recordRecentDestination(dest);
+
+      this.closeRouteSheet();
+      this.switchTabByIndex(0);
+      this.renderAll();
+
+      const fallbackNote = route.isFallback ? ' (Luftlinie)' : '';
+      const relaxNote = filterInfo.relaxed ? ` · auf ≤ ${filterInfo.usedCorridorKm} km erweitert` : '';
+      this.showToast(`🛣️ Route nach ${dest.label}: ${this.routeStations.length} Tankstellen${fallbackNote}${relaxNote}`);
+
+      // Silently prefetch opening hours for top 2 live route candidates so ETA check has real closing times
+      if (corridorRes.source === 'live' && this.config.apiKey) {
+        const topCandidates = this.computeActiveRanking().list.slice(0, 2);
+        for (const cand of topCandidates) {
+          const cached = this.stationDetailsMap.get(cand.id);
+          if ((!cached || cached.isStale) && FuelApiService.peekTokenState().ready) {
+            await this.loadAndCacheStationOpeningHours(cand.id, { userInitiated: false });
+          }
+        }
+      }
+    } catch (err) {
+      this.showToast(`Routen-Fehler: ${err.message}`);
+    } finally {
+      this.isPlanningRoute = false;
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Start';
+      }
+    }
+  }
+
+  reapplyRouteCorridorFilter() {
+    if (!this.activeRoute) {
+      this.routeStations = [];
+      return { usedCorridorKm: this.routeCorridorKm, relaxed: false };
+    }
+    const res = RouteService.filterAndAnnotateRouteStations(
+      this.routeRawStations,
+      this.activeRoute,
+      this.routeCorridorKm
+    );
+    this.routeStations = res.stations;
+    return res;
+  }
+
+  clearActiveRoute() {
+    this.activeRoute = null;
+    this.routeRawStations = [];
+    this.routeStations = [];
+    this.skippedStationIds.clear();
+    this.showAllStations = false;
+    this.renderAll();
+    this.showToast('Zurück zum Umkreis-Radar');
+  }
+
+  async saveCurrentRouteAsFavorite() {
+    if (!this.activeRoute || !this.activeRoute.dest) return;
+    const d = this.activeRoute.dest;
+    const exists = this.routeFavorites.some(
+      (f) => Math.abs(f.lat - d.lat) < 0.002 && Math.abs(f.lng - d.lng) < 0.002
+    );
+    if (exists) return;
+
+    const entry = {
+      id: `rfav_${Date.now()}`,
+      label: d.label || 'Schnellziel',
+      lat: d.lat,
+      lng: d.lng,
+      icon: '📍'
+    };
+    this.routeFavorites = [entry, ...this.routeFavorites].slice(0, 8);
+    await db.setSetting('routeFavorites', this.routeFavorites);
+    this.renderRouteSheetLists();
+    this.showToast(`★ „${entry.label}“ als Schnellziel gespeichert`);
+  }
+
+  async deleteRouteFavorite(id) {
+    this.routeFavorites = this.routeFavorites.filter((f) => f.id !== id);
+    await db.setSetting('routeFavorites', this.routeFavorites);
+    this.renderRouteSheetLists();
+  }
+
+  async recordRecentDestination(dest) {
+    const clean = {
+      label: dest.label || 'Ziel',
+      lat: Number(dest.lat),
+      lng: Number(dest.lng)
+    };
+    const filtered = this.recentDestinations.filter(
+      (r) => !(Math.abs(r.lat - clean.lat) < 0.002 && Math.abs(r.lng - clean.lng) < 0.002)
+    );
+    this.recentDestinations = [clean, ...filtered].slice(0, 4);
+    await db.setSetting('recentDestinations', this.recentDestinations);
+  }
+
   // --- Settings & Export Handlers ---
 
   async handleSettingsSubmit(e) {
@@ -1778,8 +2323,9 @@ class ZapfyApp {
     const demoMode = Boolean(document.getElementById('settingDemoMode')?.checked);
     const defaultFuel = document.getElementById('settingDefaultFuel')?.value || 'e10';
     const fallbackRegion = document.getElementById('settingFallbackRegion')?.value || '52.5200,13.4050';
+    const shortlinkResolverUrl = String(document.getElementById('settingResolverUrl')?.value || '').trim().replace(/\/+$/, '');
 
-    this.config = { apiKey, demoMode, tankVolume, consumption, defaultFuel, fallbackRegion };
+    this.config = { apiKey, demoMode, tankVolume, consumption, defaultFuel, fallbackRegion, shortlinkResolverUrl };
     this.fuelType = defaultFuel;
 
     await Promise.all([
@@ -1788,13 +2334,18 @@ class ZapfyApp {
       db.setSetting('apiKey', apiKey),
       db.setSetting('demoMode', demoMode),
       db.setSetting('defaultFuel', defaultFuel),
-      db.setSetting('fallbackRegion', fallbackRegion)
+      db.setSetting('fallbackRegion', fallbackRegion),
+      db.setSetting('shortlinkResolverUrl', shortlinkResolverUrl)
     ]);
 
     this.syncControlsUI();
     this.showToast('Einstellungen gespeichert');
     await this.refreshGpsAndFetchPrices({ silentGpsFallback: true });
-    this.switchTabByIndex(0);
+    if (this.activeRoute && this.activeRoute.dest) {
+      await this.planRouteToDestination(this.activeRoute.dest, { forceRefresh: true });
+    } else {
+      this.switchTabByIndex(0);
+    }
   }
 
   async handleUseCurrentGpsAsFallback() {

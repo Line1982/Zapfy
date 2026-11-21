@@ -5,7 +5,7 @@
  * refueling recommendations ("Jetzt tanken" vs. "Besser 18–20 Uhr tanken").
  */
 
-import { FuelApiService } from './fuel_api.js';
+import { FuelApiService } from './fuel_api.js?v=2.2.1';
 
 export class PriceEngine {
   /**
@@ -351,6 +351,218 @@ export class PriceEngine {
       autoExpanded: false,
       hasActiveHeading,
       headingDeg
+    };
+  }
+
+  /**
+   * Ranks stations along an active driving route using off-route detour economics
+   * and live GPS progress along the route polyline (automatically hiding passed stops).
+   */
+  static rankRouteStations(
+    stations,
+    fuelType = 'e10',
+    sortMode = 'smart',
+    favoritesSet = new Set(),
+    tankLiters = 50,
+    consumptionL100km = 7.0,
+    routeContext = null
+  ) {
+    const currentAlongRouteKm = Number(routeContext?.currentAlongRouteKm) || 0;
+    const totalRouteKm = Number(routeContext?.totalRouteKm) || 0;
+    const totalDurationMin = Number(routeContext?.totalDurationMin) || 0;
+    const stationDetailsMap = routeContext?.stationDetailsMap instanceof Map ? routeContext.stationDetailsMap : null;
+    const now = routeContext?.now instanceof Date ? routeContext.now : new Date();
+    const showAll = Boolean(routeContext && routeContext.showAll);
+    const skippedIds = routeContext && routeContext.skippedIds instanceof Set ? routeContext.skippedIds : null;
+
+    if (!Array.isArray(stations) || stations.length === 0) {
+      return {
+        list: [],
+        hiddenCount: 0,
+        totalRelevantCount: 0,
+        openCount: 0,
+        totalCount: 0,
+        minPrice: null,
+        maxPrice: null,
+        avgPrice: null,
+        spreadPerLiter: 0,
+        smartDetour: null,
+        effectiveRadiusKm: totalRouteKm,
+        autoExpanded: false,
+        hasActiveHeading: false,
+        headingDeg: null,
+        isRouteMode: true,
+        currentAlongRouteKm,
+        totalRouteKm,
+        passedCount: 0
+      };
+    }
+
+    const effectiveTank = Math.max(10, Math.min(150, Number(tankLiters) || 50));
+    const effectiveConsumption = Math.max(2.0, Math.min(25.0, Number(consumptionL100km) || 7.0));
+
+    const pricedAll = [];
+    for (const st of stations) {
+      const price = st[fuelType];
+      const activePrice = typeof price === 'number' && price > 0 ? price : null;
+      if (activePrice === null) continue;
+
+      const alongRouteKm = Number(st.alongRouteKm) || 0;
+      const corridorDistKm = Number(st.corridorDistKm) || 0;
+      const estimatedDetourKm = Number(st.estimatedDetourKm ?? corridorDistKm * 2 * 1.35);
+      const remainingAlongRouteKm = Number((alongRouteKm - currentAlongRouteKm).toFixed(1));
+      const isPassed = remainingAlongRouteKm < -0.5;
+
+      const etaMinutes = totalRouteKm > 0 && totalDurationMin > 0
+        ? Math.max(0, Math.round((Math.max(0, remainingAlongRouteKm) / totalRouteKm) * totalDurationMin))
+        : 0;
+      const arrivalDate = new Date(now.getTime() + etaMinutes * 60000);
+      const etaTimeLabel = `${String(arrivalDate.getHours()).padStart(2, '0')}:${String(arrivalDate.getMinutes()).padStart(2, '0')}`;
+
+      const detail = (stationDetailsMap && stationDetailsMap.get(st.id)) ||
+        (String(st.id).startsWith('sim-') ? FuelApiService.getSimulatedDetail(st.id) : null);
+      const arrivalEval = FuelApiService.evaluateOpenAtTime(detail, arrivalDate);
+      const effectiveOpenAtArrival = arrivalEval.known ? Boolean(arrivalEval.isOpenAtTime) : Boolean(st.isOpen);
+
+      const tripFuelLiters = (estimatedDetourKm * effectiveConsumption) / 100;
+      const detourFuelCost = Number((tripFuelLiters * activePrice).toFixed(2));
+      const effectiveTotalCost = Number(((effectiveTank + tripFuelLiters) * activePrice).toFixed(2));
+
+      pricedAll.push({
+        ...st,
+        activePrice,
+        isFavorite: favoritesSet.has(st.id),
+        isRouteStation: true,
+        corridorDistKm,
+        alongRouteKm,
+        remainingAlongRouteKm,
+        isPassed,
+        etaMinutes,
+        etaTimeLabel,
+        arrivalOpenStatus: arrivalEval.status,
+        arrivalOpenKnown: arrivalEval.known,
+        arrivalMinutesUntilClose: arrivalEval.minutesUntilClose,
+        arrivalClosingLabel: arrivalEval.closingLabel,
+        arrivalOpeningLabel: arrivalEval.openingLabel,
+        effectiveOpenAtArrival,
+        routeStatus: 'ahead',
+        effectiveRoundTripKm: estimatedDetourKm,
+        detourFuelCost,
+        effectiveTotalCost,
+        extraDistOneWay: Number(corridorDistKm.toFixed(1)),
+        dist: Math.max(0, remainingAlongRouteKm)
+      });
+    }
+
+    const aheadStations = pricedAll.filter((s) => !s.isPassed);
+    const passedCount = pricedAll.length - aheadStations.length;
+    const activePool = aheadStations.length > 0 ? aheadStations : pricedAll;
+
+    let minPrice = null;
+    let maxPrice = null;
+    let sumPrice = 0;
+    let openSumPrice = 0;
+    let openCountAll = 0;
+    let minEffectiveTotalCost = null;
+
+    for (const st of activePool) {
+      if (minPrice === null || st.activePrice < minPrice) minPrice = st.activePrice;
+      if (maxPrice === null || st.activePrice > maxPrice) maxPrice = st.activePrice;
+      sumPrice += st.activePrice;
+      if (st.effectiveOpenAtArrival) {
+        openSumPrice += st.activePrice;
+        openCountAll += 1;
+        if (minEffectiveTotalCost === null || st.effectiveTotalCost < minEffectiveTotalCost) {
+          minEffectiveTotalCost = st.effectiveTotalCost;
+        }
+      }
+    }
+
+    const avgPrice = activePool.length > 0 ? Number((sumPrice / activePool.length).toFixed(3)) : null;
+    const baselinePrice = openCountAll > 0 ? openSumPrice / openCountAll : avgPrice;
+    const baselineTotalCost = baselinePrice !== null ? baselinePrice * effectiveTank : null;
+
+    activePool.sort((a, b) => {
+      if (a.effectiveOpenAtArrival !== b.effectiveOpenAtArrival) {
+        return a.effectiveOpenAtArrival ? -1 : 1;
+      }
+
+      if (sortMode === 'dist') {
+        const remA = Math.max(0, a.remainingAlongRouteKm);
+        const remB = Math.max(0, b.remainingAlongRouteKm);
+        if (remA !== remB) return remA - remB;
+        return a.activePrice - b.activePrice;
+      }
+
+      if (sortMode === 'price') {
+        if (a.activePrice !== b.activePrice) return a.activePrice - b.activePrice;
+        return a.corridorDistKm - b.corridorDistKm;
+      }
+
+      // Default 'smart': lowest total cost (fuel + off-route detour)
+      if (a.effectiveTotalCost !== b.effectiveTotalCost) {
+        return a.effectiveTotalCost - b.effectiveTotalCost;
+      }
+      if (a.corridorDistKm !== b.corridorDistKm) {
+        return a.corridorDistKm - b.corridorDistKm;
+      }
+      return a.remainingAlongRouteKm - b.remainingAlongRouteKm;
+    });
+
+    const rankedAll = activePool.map((st, idx) => {
+      const diffToMin = minPrice !== null ? Number((st.activePrice - minPrice).toFixed(3)) : 0;
+      const isCheapest = minPrice !== null && Math.abs(st.activePrice - minPrice) < 0.0005;
+      const isBestSmart =
+        st.effectiveOpenAtArrival && minEffectiveTotalCost !== null && Math.abs(st.effectiveTotalCost - minEffectiveTotalCost) <= 0.05;
+      const diffToBestNet =
+        minEffectiveTotalCost !== null ? Number((st.effectiveTotalCost - minEffectiveTotalCost).toFixed(2)) : 0;
+      const netSavingVsNearest =
+        baselineTotalCost !== null ? Number((baselineTotalCost - st.effectiveTotalCost).toFixed(2)) : 0;
+      const isWorthwhileDetour = Boolean(
+        st.effectiveOpenAtArrival && st.corridorDistKm > 0.4 && netSavingVsNearest >= 0.4
+      );
+
+      return {
+        ...st,
+        rank: idx + 1,
+        isCheapest,
+        isBestSmart,
+        diffToMin,
+        diffToBestNet,
+        netSavingVsNearest,
+        isNearestOpen: false,
+        isWorthwhileDetour
+      };
+    });
+
+    const unskippedRanked = skippedIds && skippedIds.size > 0
+      ? rankedAll.filter((s) => !skippedIds.has(s.id))
+      : rankedAll;
+
+    const MAX_VISIBLE = 8;
+    const visiblePriced = showAll ? unskippedRanked : unskippedRanked.slice(0, MAX_VISIBLE);
+    const hiddenCount = Math.max(0, unskippedRanked.length - visiblePriced.length);
+    const openCount = rankedAll.filter((s) => s.effectiveOpenAtArrival).length;
+
+    return {
+      list: visiblePriced,
+      hiddenCount,
+      totalRelevantCount: rankedAll.length,
+      openCount,
+      totalCount: rankedAll.length,
+      minPrice,
+      maxPrice,
+      avgPrice,
+      spreadPerLiter: minPrice !== null && maxPrice !== null ? Number((maxPrice - minPrice).toFixed(3)) : 0,
+      smartDetour: null,
+      effectiveRadiusKm: totalRouteKm,
+      autoExpanded: false,
+      hasActiveHeading: false,
+      headingDeg: null,
+      isRouteMode: true,
+      currentAlongRouteKm,
+      totalRouteKm,
+      passedCount
     };
   }
 
