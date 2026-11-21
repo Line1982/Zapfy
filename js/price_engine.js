@@ -5,7 +5,7 @@
  * refueling recommendations ("Jetzt tanken" vs. "Besser 18–20 Uhr tanken").
  */
 
-import { FuelApiService } from './fuel_api.js?v=2.2.0';
+import { FuelApiService } from './fuel_api.js?v=2.2.1';
 
 export class PriceEngine {
   /**

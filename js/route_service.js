@@ -5,7 +5,7 @@
  * and projects stations & live GPS onto the route polyline.
  */
 
-import { FuelApiService } from './fuel_api.js?v=2.2.0';
+import { FuelApiService } from './fuel_api.js?v=2.2.1';
 
 const STORAGE_KEY_ROUTE_CACHE = 'zapfy_route_corridor_cache_v1';
 const ROUTE_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -47,7 +47,7 @@ export class RouteService {
     if (continueMatch && continueMatch[1]) {
       try {
         const decodedContinue = decodeURIComponent(continueMatch[1]);
-        if (/google\.[^/]+\/maps/i.test(decodedContinue)) {
+        if (/(?:maps\.google\.|google\.[^/]+\/maps|maps\.apple\.com)/i.test(decodedContinue)) {
           combined = decodedContinue;
         }
       } catch {
@@ -166,8 +166,10 @@ export class RouteService {
       }
     }
 
-    // Text query inside Google Maps / Apple Maps (?q=, ?destination=, ?address=)
-    const queryTextMatch = combined.match(/[?&](?:q|query|destination|daddr|address)=([^&#]+)/i);
+    // Text query inside Google Maps / Apple Maps (?q=, ?destination=, ?address=) — skip anti-bot /sorry/index tokens
+    const queryTextMatch = !/\/sorry\/index/i.test(combined)
+      ? combined.match(/[?&](?:q|query|destination|daddr|address)=([^&#]+)/i)
+      : null;
     if (queryTextMatch && queryTextMatch[1]) {
       try {
         const decodedQuery = decodeURIComponent(queryTextMatch[1].replace(/\+/g, ' ')).trim();
@@ -327,11 +329,15 @@ export class RouteService {
     }
 
     const top = places[0];
-    const shortLabel = (top.displayName || parsed.label || parsed.query)
-      .split(',')
-      .slice(0, 2)
-      .join(', ')
-      .trim();
+    const rawDisplay = String(top.displayName || '').trim();
+    const startsWithHouseNumber = /^\d+[a-zA-Z]?\s*,/.test(rawDisplay);
+    const shortLabel = startsWithHouseNumber && parsed.label
+      ? parsed.label
+      : (rawDisplay || parsed.label || parsed.query)
+        .split(',')
+        .slice(0, 2)
+        .join(', ')
+        .trim();
 
     return {
       lat: Number(top.lat.toFixed(6)),
@@ -349,6 +355,10 @@ export class RouteService {
     if (!clean) return [];
 
     const candidates = [clean];
+    const expandedStr = clean.replace(/\bStr\.\s*/gi, 'Straße ').trim();
+    if (expandedStr && expandedStr !== clean) {
+      candidates.push(expandedStr);
+    }
     const stripDistrict = (str) => str.replace(/(\b\d{5}\s+[^,\-]+)-[^,]+/g, '$1').trim();
 
     const noDistrict = stripDistrict(clean);

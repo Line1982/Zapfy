@@ -4,11 +4,11 @@
  * turn-by-turn navigation handover, IndexedDB price snapshot recording, and statistical forecasting.
  */
 
-import { db } from './db.js?v=2.2.0';
-import { FuelApiService } from './fuel_api.js?v=2.2.0';
-import { PriceEngine } from './price_engine.js?v=2.2.0';
-import { RouteService } from './route_service.js?v=2.2.0';
-import { ExportService } from './export_service.js?v=2.2.0';
+import { db } from './db.js?v=2.2.1';
+import { FuelApiService } from './fuel_api.js?v=2.2.1';
+import { PriceEngine } from './price_engine.js?v=2.2.1';
+import { RouteService } from './route_service.js?v=2.2.1';
+import { ExportService } from './export_service.js?v=2.2.1';
 
 const FUEL_LABELS = {
   e10: 'Super E10',
