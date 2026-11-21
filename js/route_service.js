@@ -10,6 +10,8 @@ import { FuelApiService } from './fuel_api.js';
 const STORAGE_KEY_ROUTE_CACHE = 'zapfy_route_corridor_cache_v1';
 const ROUTE_CACHE_TTL_MS = 5 * 60 * 1000;
 const OSRM_TIMEOUT_MS = 5500;
+const RESOLVER_TIMEOUT_MS = 6500;
+const DEFAULT_SHORTLINK_RESOLVER_URL = 'https://zapfy-maps-resolver.wassermann-andre.workers.dev';
 
 const OSRM_ENDPOINTS = [
   'https://router.project-osrm.org/route/v1/driving',
@@ -34,9 +36,23 @@ export class RouteService {
         uniqueParts.push(part);
       }
     }
-    const combined = uniqueParts.join('\n').trim();
-    if (!combined) {
+    const rawCombined = uniqueParts.join('\n').trim();
+    if (!rawCombined) {
       return { type: 'empty' };
+    }
+
+    // If an expanded redirect URL wraps a Google Maps URL inside `continue=...`, unwrap it for parsing
+    let combined = rawCombined;
+    const continueMatch = rawCombined.match(/[?&]continue=(https?(?:%3A|:)(?:%2F|\/){2}[^&\s]+)/i);
+    if (continueMatch && continueMatch[1]) {
+      try {
+        const decodedContinue = decodeURIComponent(continueMatch[1]);
+        if (/google\.[^/]+\/maps/i.test(decodedContinue)) {
+          combined = decodedContinue;
+        }
+      } catch {
+        // Ignore malformed continue param
+      }
     }
 
     const extractPlaceLabel = (text) => {
@@ -133,23 +149,7 @@ export class RouteService {
       }
     }
 
-    // 5. Text query inside Google Maps ?q= or ?destination= or /maps/place/
-    const queryTextMatch = combined.match(/[?&](?:q|query|destination|daddr)=([^&#]+)/i);
-    if (queryTextMatch && queryTextMatch[1]) {
-      try {
-        const decodedQuery = decodeURIComponent(queryTextMatch[1].replace(/\+/g, ' ')).trim();
-        if (decodedQuery && !/^https?:\/\//i.test(decodedQuery)) {
-          return {
-            type: 'query',
-            query: decodedQuery,
-            label: decodedQuery.split(',')[0].trim()
-          };
-        }
-      } catch {
-        // Ignore decode failure
-      }
-    }
-
+    // 5. Place path (/maps/place/<name>) takes priority over generic ?q= parameters
     const placePathMatch = combined.match(/\/maps\/place\/([^/@?#]+)/i);
     if (placePathMatch && placePathMatch[1]) {
       try {
@@ -159,6 +159,23 @@ export class RouteService {
             type: 'query',
             query: decodedPlace,
             label: decodedPlace.split(',')[0].trim()
+          };
+        }
+      } catch {
+        // Ignore decode failure
+      }
+    }
+
+    // Text query inside Google Maps ?q= or ?destination=
+    const queryTextMatch = combined.match(/[?&](?:q|query|destination|daddr)=([^&#]+)/i);
+    if (queryTextMatch && queryTextMatch[1]) {
+      try {
+        const decodedQuery = decodeURIComponent(queryTextMatch[1].replace(/\+/g, ' ')).trim();
+        if (decodedQuery && !/^https?:\/\//i.test(decodedQuery)) {
+          return {
+            type: 'query',
+            query: decodedQuery,
+            label: decodedQuery.split(',')[0].trim()
           };
         }
       } catch {
@@ -194,19 +211,87 @@ export class RouteService {
   }
 
   /**
+   * Expands a bare `maps.app.goo.gl` / `goo.gl/maps` shortlink via a configured CORS resolver Worker.
+   */
+  static async expandShortLink(shortUrl, resolverUrl = '') {
+    const base = String(resolverUrl || DEFAULT_SHORTLINK_RESOLVER_URL || '').trim().replace(/\/+$/, '');
+    if (!base) {
+      throw new Error('Keine Kurzlink-Resolver-URL konfiguriert.');
+    }
+
+    let endpoint;
+    try {
+      const parsedBase = new URL(base);
+      const isLocal = parsedBase.hostname === 'localhost' || parsedBase.hostname === '127.0.0.1';
+      if (parsedBase.protocol !== 'https:' && !(parsedBase.protocol === 'http:' && isLocal)) {
+        throw new Error('Resolver-URL muss mit https:// beginnen.');
+      }
+      endpoint = `${parsedBase.toString().replace(/\/+$/, '')}/?url=${encodeURIComponent(shortUrl)}`;
+    } catch (err) {
+      throw new Error(err?.message || 'Ungültige Kurzlink-Resolver-URL im Setup.');
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), RESOLVER_TIMEOUT_MS);
+
+    try {
+      const resp = await fetch(endpoint, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data || !data.ok) {
+        throw new Error(data?.error || `Resolver-Fehler (HTTP ${resp.status})`);
+      }
+      return data;
+    } catch (err) {
+      if (err?.name === 'AbortError') {
+        throw new Error('Kurzlink-Resolver Zeitüberschreitung. Bitte erneut versuchen.');
+      }
+      throw new Error(err?.message || 'Kurzlink konnte nicht aufgelöst werden.');
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /**
    * Resolves any parsed destination input into exact `{ lat, lng, label }` coordinates.
    */
-  static async resolveDestination(rawInput, shareMeta = {}) {
-    const parsed = this.parseGoogleMapsInput(rawInput, shareMeta);
+  static async resolveDestination(rawInput, shareMeta = {}, { shortlinkResolverUrl = '' } = {}) {
+    let parsed = this.parseGoogleMapsInput(rawInput, shareMeta);
 
     if (parsed.type === 'empty') {
       throw new Error('Bitte Ziel, Ort, PLZ oder Google-Maps-Link eingeben.');
     }
 
     if (parsed.type === 'shortlink_only') {
-      throw new Error(
-        'Kurzlink ohne Adresse erkannt. Bitte Ort/Adresse eingeben oder in Maps die Adresse mitkopieren.'
-      );
+      const effectiveResolver = String(shortlinkResolverUrl || DEFAULT_SHORTLINK_RESOLVER_URL || '').trim();
+      if (!effectiveResolver) {
+        throw new Error(
+          'Google-Maps-Kurzlink erkannt. Bitte im Tab „Setup“ deine kostenlose Kurzlink-Resolver-URL eintragen (oder Ort/Adresse eingeben).'
+        );
+      }
+
+      const expanded = await this.expandShortLink(parsed.url, effectiveResolver);
+      const expLat = Number(expanded.lat);
+      const expLng = Number(expanded.lng);
+      if (Number.isFinite(expLat) && Number.isFinite(expLng) && (Math.abs(expLat) > 0.001 || Math.abs(expLng) > 0.001)) {
+        return {
+          lat: Number(expLat.toFixed(6)),
+          lng: Number(expLng.toFixed(6)),
+          label: String(expanded.label || '').trim() || 'Google Maps Ziel'
+        };
+      }
+
+      if (expanded.resolvedUrl) {
+        parsed = this.parseGoogleMapsInput(expanded.resolvedUrl, { title: expanded.label || '' });
+        if (parsed.type !== 'coords' && parsed.type !== 'query') {
+          throw new Error('Kurzlink konnte nicht in Koordinaten aufgelöst werden. Bitte Ort oder Adresse eingeben.');
+        }
+      } else {
+        throw new Error('Kurzlink konnte nicht in Koordinaten aufgelöst werden. Bitte Ort oder Adresse eingeben.');
+      }
     }
 
     if (parsed.type === 'coords') {
@@ -217,7 +302,7 @@ export class RouteService {
       };
     }
 
-    const places = await FuelApiService.geocodePlace(parsed.query);
+    const places = await this.geocodeWithFallbacks(parsed.query);
     if (!Array.isArray(places) || places.length === 0) {
       throw new Error('Ziel nicht gefunden. Bitte Ort, PLZ oder Straße genauer angeben.');
     }
@@ -234,6 +319,50 @@ export class RouteService {
       lng: Number(top.lng.toFixed(6)),
       label: shortLabel || parsed.label || parsed.query
     };
+  }
+
+  /**
+   * Builds simplified fallback search strings for verbose Google Maps place labels
+   * (e.g. "Legau, Sack 47, 87764 Legau-Sack" -> "Sack 47, 87764 Legau" -> "87764 Legau").
+   */
+  static buildGeocodeCandidates(rawQuery) {
+    const clean = String(rawQuery || '').trim();
+    if (!clean) return [];
+
+    const candidates = [clean];
+    const stripDistrict = (str) => str.replace(/(\b\d{5}\s+[^,\-]+)-[^,]+/g, '$1').trim();
+
+    const noDistrict = stripDistrict(clean);
+    if (noDistrict && noDistrict !== clean) {
+      candidates.push(noDistrict);
+    }
+
+    const parts = clean.split(',').map((p) => p.trim()).filter(Boolean);
+    if (parts.length >= 3) {
+      const tailRaw = parts.slice(1).join(', ');
+      candidates.push(stripDistrict(tailRaw));
+      candidates.push(tailRaw);
+    } else if (parts.length === 2) {
+      candidates.push(stripDistrict(parts[1]));
+    }
+
+    const plzCityMatch = noDistrict.match(/\b\d{5}\s+[^,]+/);
+    if (plzCityMatch && plzCityMatch[0]) {
+      candidates.push(plzCityMatch[0].trim());
+    }
+
+    return Array.from(new Set(candidates.filter((c) => c && c.length >= 2)));
+  }
+
+  static async geocodeWithFallbacks(rawQuery) {
+    const candidates = this.buildGeocodeCandidates(rawQuery);
+    for (const cand of candidates) {
+      const places = await FuelApiService.geocodePlace(cand);
+      if (Array.isArray(places) && places.length > 0) {
+        return places;
+      }
+    }
+    return [];
   }
 
   /**

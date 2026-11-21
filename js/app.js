@@ -32,7 +32,8 @@ class ZapfyApp {
       tankVolume: 50,
       consumption: 7.0,
       defaultFuel: 'e10',
-      fallbackRegion: '52.5200,13.4050'
+      fallbackRegion: '52.5200,13.4050',
+      shortlinkResolverUrl: ''
     };
 
     this.currentLocation = {
@@ -110,7 +111,7 @@ class ZapfyApp {
     const [
       apiKey, demoMode, tankVolume, consumption, defaultFuel, fallbackRegion, sortMode,
       themeMode, savingsTotal, fillCount, homeStation, routeFavorites, recentDestinations,
-      routeCorridorKm, favorites, snapshots, detailsMap
+      routeCorridorKm, shortlinkResolverUrl, favorites, snapshots, detailsMap
     ] = await Promise.all([
       db.getSetting('apiKey', ''),
       db.getSetting('demoMode', false),
@@ -126,6 +127,7 @@ class ZapfyApp {
       db.getSetting('routeFavorites', []),
       db.getSetting('recentDestinations', []),
       db.getSetting('routeCorridorKm', 3.0),
+      db.getSetting('shortlinkResolverUrl', ''),
       db.getFavorites(),
       db.getAllSnapshots(),
       db.getAllStationDetailsMap()
@@ -137,7 +139,8 @@ class ZapfyApp {
       tankVolume: Number(tankVolume) || 50,
       consumption: Number(consumption) > 0 ? Number(consumption) : 7.0,
       defaultFuel: ['e10', 'e5', 'diesel'].includes(defaultFuel) ? defaultFuel : 'e10',
-      fallbackRegion: fallbackRegion || '52.5200,13.4050'
+      fallbackRegion: fallbackRegion || '52.5200,13.4050',
+      shortlinkResolverUrl: String(shortlinkResolverUrl || '').trim()
     };
 
     this.fuelType = this.config.defaultFuel;
@@ -199,12 +202,14 @@ class ZapfyApp {
     const inpDemo = document.getElementById('settingDemoMode');
     const selFuel = document.getElementById('settingDefaultFuel');
     const selRegion = document.getElementById('settingFallbackRegion');
+    const inpResolver = document.getElementById('settingResolverUrl');
 
     if (inpTank) inpTank.value = this.config.tankVolume;
     if (inpConsumption) inpConsumption.value = Number(this.config.consumption || 7.0).toFixed(1);
     if (inpKey) inpKey.value = this.config.apiKey;
     if (inpDemo) inpDemo.checked = this.config.demoMode;
     if (selFuel) selFuel.value = this.config.defaultFuel;
+    if (inpResolver) inpResolver.value = this.config.shortlinkResolverUrl || '';
 
     // Setup Fuel Pills
     document.querySelectorAll('.setup-fuel-pill[data-setup-fuel]').forEach((btn) => {
@@ -2092,7 +2097,9 @@ class ZapfyApp {
     }
 
     try {
-      const dest = await RouteService.resolveDestination(rawInput, shareMeta);
+      const dest = await RouteService.resolveDestination(rawInput, shareMeta, {
+        shortlinkResolverUrl: this.config.shortlinkResolverUrl
+      });
       await this.planRouteToDestination(dest);
     } catch (err) {
       this.showToast(err.message || 'Ziel konnte nicht aufgelöst werden');
@@ -2243,8 +2250,9 @@ class ZapfyApp {
     const demoMode = Boolean(document.getElementById('settingDemoMode')?.checked);
     const defaultFuel = document.getElementById('settingDefaultFuel')?.value || 'e10';
     const fallbackRegion = document.getElementById('settingFallbackRegion')?.value || '52.5200,13.4050';
+    const shortlinkResolverUrl = String(document.getElementById('settingResolverUrl')?.value || '').trim().replace(/\/+$/, '');
 
-    this.config = { apiKey, demoMode, tankVolume, consumption, defaultFuel, fallbackRegion };
+    this.config = { apiKey, demoMode, tankVolume, consumption, defaultFuel, fallbackRegion, shortlinkResolverUrl };
     this.fuelType = defaultFuel;
 
     await Promise.all([
@@ -2253,7 +2261,8 @@ class ZapfyApp {
       db.setSetting('apiKey', apiKey),
       db.setSetting('demoMode', demoMode),
       db.setSetting('defaultFuel', defaultFuel),
-      db.setSetting('fallbackRegion', fallbackRegion)
+      db.setSetting('fallbackRegion', fallbackRegion),
+      db.setSetting('shortlinkResolverUrl', shortlinkResolverUrl)
     ]);
 
     this.syncControlsUI();

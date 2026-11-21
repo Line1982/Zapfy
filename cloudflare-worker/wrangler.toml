@@ -1,0 +1,3 @@
+name = "zapfy-maps-resolver"
+main = "maps-resolver.js"
+compatibility_date = "2025-01-01"

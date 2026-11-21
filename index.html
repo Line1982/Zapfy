@@ -14,12 +14,12 @@
   <meta name="format-detection" content="telephone=no">
 
   <!-- Manifest & Icons -->
-  <link rel="manifest" href="manifest.json?v=2.1.0">
+  <link rel="manifest" href="manifest.json?v=2.1.2">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png?v=2.0.0">
   <link rel="icon" type="image/png" href="assets/icon-192.png?v=2.0.0">
   <link rel="icon" type="image/x-icon" href="assets/favicon.ico?v=2.0.0">
 
-  <link rel="stylesheet" href="styles.css?v=2.1.0">
+  <link rel="stylesheet" href="styles.css?v=2.1.2">
 </head>
 <body>
 
@@ -315,6 +315,15 @@
                   </select>
                 </div>
 
+                <!-- Optional: Cloudflare Worker für Google-Maps-Kurzlinks (maps.app.goo.gl) -->
+                <div class="setting-field">
+                  <div class="setting-label-row">
+                    <label class="setting-field-label" for="settingResolverUrl">Maps-Kurzlink-Resolver (Optional)</label>
+                    <a href="https://dash.cloudflare.com/" target="_blank" rel="noopener noreferrer" class="api-key-link">Cloudflare gratis ↗</a>
+                  </div>
+                  <input type="url" class="setting-input" id="settingResolverUrl" placeholder="Standard aktiv (eigene Worker-URL optional)" autocomplete="off" spellcheck="false">
+                </div>
+
                 <button type="submit" class="btn-save-settings">Einstellungen speichern &amp; neu laden</button>
               </div>
 
@@ -497,10 +506,11 @@
         </div>
 
         <details class="ios-shortcut-tip">
-          <summary>💡 Tipp: Direkt „Teilen → Zapfy“ aus Google Maps</summary>
+          <summary>💡 Tipp: „Teilen → Zapfy“ &amp; Kurzlinks</summary>
           <p>
-            <strong>Android:</strong> Installierte Zapfy-PWA erscheint direkt im Teilen-Menü von Google Maps.<br>
-            <strong>iPhone (iOS):</strong> In 30 Sek. in Apple <em>Kurzbefehle</em>: „URL / Text empfangen (im Teilen-Blatt zeigen)“ → Aktion <em>URL öffnen</em> mit deiner Zapfy-URL + <code>?dest=</code> + übergebenem Text/Link. Oder in Maps <em>Teilen → Kopieren</em> und oben auf <strong>📋</strong> tippen.
+            <strong>Google-Maps-Kurzlinks (<code>maps.app.goo.gl</code>):</strong> Im Tab <em>Setup</em> einmalig deine kostenlose Cloudflare-Worker-URL eintragen – danach funktioniert <em>Link kopieren → 📋 einfügen</em> direkt.<br>
+            <strong>Android:</strong> Installierte Zapfy-PWA (über Chrome <em>App installieren</em>) erscheint im Teilen-Menü.<br>
+            <strong>iPhone (iOS):</strong> In 30 Sek. in Apple <em>Kurzbefehle</em> („Im Teilen-Blatt zeigen“ → <em>URL erweitern</em> → <em>URL codieren</em> → <em>URLs öffnen</em> <code>…?dest=</code>).
           </p>
         </details>
       </div>
@@ -511,6 +521,6 @@
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
   <!-- App Entry Script -->
-  <script type="module" src="js/app.js?v=2.1.0"></script>
+  <script type="module" src="js/app.js?v=2.1.2"></script>
 </body>
 </html>
