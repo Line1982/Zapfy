@@ -4,7 +4,7 @@
  * Live Tankerkönig API calls bypass the static cache so fuel prices are always fresh.
  */
 
-const CACHE_NAME = 'zapfy-cache-v2.2.1';
+const CACHE_NAME = 'zapfy-cache-v2.3.0';
 
 const ASSETS_TO_CACHE = [
   './',
@@ -44,8 +44,8 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Never cache external API requests (Tankerkönig live prices) or dynamic collector data
-  if (url.origin !== self.location.origin || url.pathname.endsWith('/price_history.json')) {
+  // Never cache external API requests (Tankerkönig live prices)
+  if (url.origin !== self.location.origin) {
     return;
   }
 

@@ -1,31 +1,27 @@
 # Zapfy ⛽📱
 
-**Günstigste Tankstellen im Umkreis · 1-Tap Google Maps Übergabe · Intelligente Preisprognose**
+**Günstigste Tankstellen im Umkreis & entlang deiner Route · 1-Tap Google Maps Übergabe · Spar-Konto**
 
-Zapfy ist eine schnelle, für die Nutzung im Auto optimierte Smartphone-PWA im **Shiftly 3D-Tactile-Design**. Beim Öffnen ermittelt die App deinen aktuellen GPS-Standort, holt die Echtzeit-Tankstellenpreise im Umkreis ab, sortiert die günstigsten Tankstellen ganz nach oben und übergibt dein Ziel per 1-Tap direkt an Google Maps.
+Zapfy ist eine schnelle, für die Nutzung im Auto optimierte Smartphone-PWA im **Shiftly 3D-Tactile-Design**. Beim Öffnen ermittelt die App deinen aktuellen GPS-Standort, holt die Echtzeit-Tankstellenpreise im Umkreis oder entlang einer geplanten Route ab, sortiert die besten Deals ganz nach oben und übergibt dein Ziel per 1-Tap direkt an Google Maps.
 
 ---
 
 ## ✨ Hauptfunktionen
 
-1. **GPS-Umkreisradar & Günstigste zuerst (Tab 1: `Preise`)**
-   - Automatische GPS-Standortbestimmung beim Öffnen (`navigator.geolocation`).
-   - Sofort-Umschaltung zwischen **Super E10**, **Super E5** und **Diesel** sowie Suchradius (**3 km, 5 km, 10 km, 15 km**).
-   - Die günstigste geöffnete Tankstelle wird als **#1 Preis-Sieger** in Smaragdgrün ganz oben hervorgehoben – inklusive exakter Mehrkosten-Anzeige (`+4 ct (+2,00 €)`) bei allen teureren Stationen.
+1. **GPS-Umkreisradar, Route-Korridor & Smart-Ranking (Tab 1: `Preise`)**
+   - Automatische GPS-Standortbestimmung beim Öffnen (`navigator.geolocation`) inkl. Drive-Mode-Nachführung und Fokus-Cockpit (**Drive-HUD**).
+   - **Route-Korridor-Modus:** Ziel, Adresse, PLZ oder Google-Maps-Link einfügen und Tankstellen entlang der Strecke (mit ETA-Öffnungszeiten-Check) vergleichen.
+   - Sofort-Umschaltung zwischen **Smart**, **Preis** und **Nähe** im unteren Daumen-Dock sowie Tag-/Nacht-Cockpit.
+   - Die beste Option wird als **#1 Hero-Karte** hervorgehoben – inklusive Netto-Ersparnis nach Umwegkosten (`Smart-Umweg`), Vergleich mit deiner **Haus-und-Hof-Tankstelle** und `✓ Hier getankt` für dein Spar-Konto.
 
 2. **1-Tap Google Maps Übergabe (Perfekt während aktiver Navigation)**
-   - **🧭 Route starten (Maps):** Übergibt die exakten GPS-Koordinaten der Tankstelle direkt an die Google-Maps-App zur sofortigen Zielführung (`travelmode=driving`).
+   - **🧭 Route starten:** Übergibt die exakten GPS-Koordinaten der Tankstelle direkt an die Google-Maps-App zur sofortigen Zielführung (`travelmode=driving`).
    - **📍 Pin:** Öffnet den Pin in Google Maps, um die Lage direkt neben deiner aktuellen Route zu prüfen oder als Zwischenstopp hinzuzufügen.
 
-3. **Statistische Erfassung & Tageszeit-/Wochentags-Prognose (Tab 2: `Prognose`)**
-   - Speichert bei jedem App-Öffnen automatisch Preis-Snapshots in `IndexedDB` (`navigator.storage.persist()`).
-   - Kombiniert deine lokal gesammelten Preisdaten mit der deutschen **MTS-K Tageszeitkurve** und zeigt dir sofort:
-     - **🔥 Jetzt tanken!** (z. B. im Abend-Tiefpreisfenster 18:00–20:30 Uhr oder unter deinem historischen Schnitt)
-     - **⏳ Besser warten!** (z. B. während der morgendlichen Preisspitze mit konkreter €-Ersparnis-Prognose für den Abend)
-
-4. **Offizielle MTS-K Datenqualität (Tankerkönig API) + Sofort-Demomodus (Tab 3: `Setup`)**
-   - Unterstützt die offizielle, kostenlose **Tankerkönig API** (Echtzeit-Daten der Markttransparenzstelle für Kraftstoffe des Bundeskartellamts).
-   - Solange noch kein API-Key eingetragen ist, läuft Zapfy automatisch im realistischen **Simulationsmodus**, sodass alle Funktionen sofort getestet werden können.
+3. **Fahrzeugprofil, Spar-Konto & MTS-K (Tab 2: `Setup`)**
+   - Konfiguration von Kraftstoff (**Super E10**, **Super E5**, **Diesel**), Tankgröße, Ø Verbrauch, Stamm-Tankstelle, Maps-Kurzlink-Resolver und Backup/Restore.
+   - Integriertes **🏆 Mein Spar-Konto** mit Gesamtersparnis, Ø pro Tankstopp, Rückgängig-Funktion und Reset.
+   - Unterstützt die offizielle, kostenlose **Tankerkönig API** (Echtzeit-Daten der Markttransparenzstelle für Kraftstoffe des Bundeskartellamts). Ohne API-Key läuft Zapfy automatisch im realistischen **Simulationsmodus**.
 
 ---
 

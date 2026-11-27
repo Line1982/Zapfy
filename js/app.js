@@ -1,7 +1,7 @@
 /**
  * Zapfy Main Application Controller (js/app.js)
- * Coordinates GPS geolocation, Tankerkönig real-time API fetching, 1-Tap Google Maps
- * turn-by-turn navigation handover, IndexedDB price snapshot recording, and statistical forecasting.
+ * Coordinates GPS geolocation, Tankerkönig real-time API fetching, Route-Corridor planning,
+ * 1-Tap Google Maps turn-by-turn navigation handover, home-station comparison, and fuel savings tracking.
  */
 
 import { db } from './db.js?v=2.2.1';
@@ -19,7 +19,6 @@ const FUEL_LABELS = {
 class ZapfyApp {
   constructor() {
     this.activeTabIndex = 0;
-    this.statsSubView = 'cycle'; // 'cycle' | 'history'
 
     this.fuelType = 'e10';
     this.radiusKm = 15;
@@ -50,7 +49,6 @@ class ZapfyApp {
     this.dataSource = 'demo'; // 'live' | 'demo'
     this.favoritesSet = new Set();
     this.stationDetailsMap = new Map();
-    this.snapshots = [];
     this.isFetching = false;
 
     // Drive Mode & Continuous Auto-Radar State
@@ -111,7 +109,7 @@ class ZapfyApp {
     const [
       apiKey, demoMode, tankVolume, consumption, defaultFuel, fallbackRegion, sortMode,
       themeMode, savingsTotal, fillCount, homeStation, routeFavorites, recentDestinations,
-      routeCorridorKm, shortlinkResolverUrl, favorites, snapshots, detailsMap
+      routeCorridorKm, shortlinkResolverUrl, favorites, detailsMap
     ] = await Promise.all([
       db.getSetting('apiKey', ''),
       db.getSetting('demoMode', false),
@@ -129,7 +127,6 @@ class ZapfyApp {
       db.getSetting('routeCorridorKm', 3.0),
       db.getSetting('shortlinkResolverUrl', ''),
       db.getFavorites(),
-      db.getAllSnapshots(),
       db.getAllStationDetailsMap()
     ]);
 
@@ -169,7 +166,6 @@ class ZapfyApp {
         if (id === 'sim-bft-04') item.openingLabel = '07:30';
       }
     }
-    this.snapshots = snapshots || [];
   }
 
   syncControlsUI() {
@@ -234,9 +230,9 @@ class ZapfyApp {
     }
 
     // Live Cockpit Status Cards on Setup Tab
-    const statusSnaps = document.getElementById('statusSnapCount');
-    if (statusSnaps) {
-      statusSnaps.textContent = `${this.snapshots.length} Punkte`;
+    const statusTank = document.getElementById('statusTankVolumeLabel');
+    if (statusTank) {
+      statusTank.textContent = `${this.config.tankVolume} L`;
     }
     const statusCons = document.getElementById('statusConsumptionLabel');
     if (statusCons) {
@@ -377,35 +373,7 @@ class ZapfyApp {
       });
     }
 
-    // Delegated Click on Historical Station Row in Tab 2 -> On-demand opening hours check
-    const topStationsList = document.getElementById('topStationsHistoryList');
-    if (topStationsList) {
-      topStationsList.addEventListener('click', async (e) => {
-        if (e.target.closest('a, button')) return;
-        const rowEl = e.target.closest('.hist-station-row[data-station-id]');
-        if (!rowEl) return;
-
-        const stId = rowEl.getAttribute('data-station-id');
-        if (!stId) return;
-        await this.loadAndCacheStationOpeningHours(stId, { userInitiated: true });
-      });
-    }
-
-    // Tab 2 Subview Switch (Tagesverlauf vs. Ranking)
-    document.querySelectorAll('.view-pill[data-subview]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        this.statsSubView = btn.getAttribute('data-subview') || 'cycle';
-        document.querySelectorAll('.view-pill[data-subview]').forEach((b) => {
-          b.classList.toggle('active', b.getAttribute('data-subview') === this.statsSubView);
-        });
-        const cycleEl = document.getElementById('statsCycleView');
-        const histEl = document.getElementById('statsHistoryView');
-        if (cycleEl) cycleEl.hidden = this.statsSubView !== 'cycle';
-        if (histEl) histEl.hidden = this.statsSubView !== 'history';
-      });
-    });
-
-    // Tab 3 (Setup): Tank Volume +/- Steppers
+    // Tab 2 (Setup): Tank Volume +/- Steppers
     const btnTankMinus = document.getElementById('btnTankMinus');
     const btnTankPlus = document.getElementById('btnTankPlus');
     const tankInput = document.getElementById('settingTankVolume');
@@ -471,7 +439,7 @@ class ZapfyApp {
     // Home Reference Banner -> Jump to Setup Tab
     const homeRefBanner = document.getElementById('homeRefBanner');
     if (homeRefBanner) {
-      homeRefBanner.addEventListener('click', () => this.switchTabByIndex(2));
+      homeRefBanner.addEventListener('click', () => this.switchTabByIndex(1));
     }
 
     // Home Station Setup Box (Search by PLZ/City, Filter, Pick, Clear)
@@ -514,12 +482,7 @@ class ZapfyApp {
       });
     }
 
-    // Export, Backup, Restore & Reset Buttons
-    const btnExportCsv = document.getElementById('btnExportCsv');
-    if (btnExportCsv) {
-      btnExportCsv.addEventListener('click', () => this.handleExportCsv());
-    }
-
+    // Backup & Restore Buttons
     const btnBackup = document.getElementById('btnBackupShare');
     if (btnBackup) {
       btnBackup.addEventListener('click', () => this.handleBackupShare());
@@ -530,11 +493,6 @@ class ZapfyApp {
     if (btnRestore && fileRestore) {
       btnRestore.addEventListener('click', () => fileRestore.click());
       fileRestore.addEventListener('change', (e) => this.handleRestoreFile(e));
-    }
-
-    const btnClearHistory = document.getElementById('btnClearHistory');
-    if (btnClearHistory) {
-      btnClearHistory.addEventListener('click', () => this.handleClearHistory());
     }
 
     // Route Corridor Bar & Planner Bottom-Sheet
@@ -664,7 +622,7 @@ class ZapfyApp {
       const dy = e.changedTouches[0].clientY - startY;
 
       if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.4) {
-        if (dx < 0 && this.activeTabIndex < 2) {
+        if (dx < 0 && this.activeTabIndex < 1) {
           this.switchTabByIndex(this.activeTabIndex + 1);
         } else if (dx > 0 && this.activeTabIndex > 0) {
           this.switchTabByIndex(this.activeTabIndex - 1);
@@ -674,12 +632,12 @@ class ZapfyApp {
   }
 
   switchTabByIndex(index) {
-    const clamped = Math.max(0, Math.min(2, index));
+    const clamped = Math.max(0, Math.min(1, index));
     this.activeTabIndex = clamped;
 
     const track = document.getElementById('tabsTrack');
     if (track) {
-      track.style.transform = `translateX(-${clamped * 33.333333}%)`;
+      track.style.transform = `translateX(-${clamped * 50}%)`;
     }
 
     document.querySelectorAll('.nav-tab[data-index]').forEach((btn) => {
@@ -766,25 +724,6 @@ class ZapfyApp {
         timestamp: Date.now()
       };
 
-      // Save statistical price snapshots in IndexedDB + ensure 14-day history for nearby stations
-      if (this.stations.length > 0) {
-        const now = new Date();
-        // Check if our current nearby stations already have multi-day history in IndexedDB
-        const nearbyIds = new Set(this.stations.map((s) => s.id));
-        const existingNearbySnaps = (this.snapshots || []).filter((s) => nearbyIds.has(s.station_id));
-
-        if (existingNearbySnaps.length < 30) {
-          const backfill14d = FuelApiService.buildLocation14DayHistory(this.stations, 14, now);
-          await db.saveHistoricalRecordsBatch(backfill14d);
-        }
-
-        // Also sync any background-collected snapshots from data/price_history.json if present
-        await this.syncOptionalServerHistory();
-
-        await db.saveSnapshotsBatch(this.stations, now);
-        this.snapshots = await db.getAllSnapshots();
-      }
-
       const timeStr = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
       const fuelShort = FUEL_LABELS[this.fuelType] || 'E10';
       const routeHint = this.currentLocation.headingDeg !== null ? ' · Route' : '';
@@ -842,19 +781,6 @@ class ZapfyApp {
     } finally {
       this.isFetching = false;
       this.renderAll();
-    }
-  }
-
-  async syncOptionalServerHistory() {
-    try {
-      const resp = await fetch('./data/price_history.json', { cache: 'no-store' });
-      if (!resp.ok) return;
-      const payload = await resp.json();
-      if (payload && Array.isArray(payload.snapshots) && payload.snapshots.length > 0) {
-        await db.saveHistoricalRecordsBatch(payload.snapshots);
-      }
-    } catch {
-      // Optional background collector file not present yet — safely ignore
     }
   }
 
@@ -1435,20 +1361,6 @@ class ZapfyApp {
       ranking = this.computeActiveRanking();
     }
 
-    const activeSourceStations = this.activeRoute ? this.routeStations : this.stations;
-    const nearbyIds = new Set(activeSourceStations.map((s) => s.id));
-    const localSnapshots = nearbyIds.size > 0
-      ? this.snapshots.filter((s) => nearbyIds.has(s.station_id))
-      : this.snapshots;
-
-    const forecast = PriceEngine.computeForecastAndStats(
-      localSnapshots.length > 0 ? localSnapshots : this.snapshots,
-      ranking,
-      this.fuelType,
-      this.config.tankVolume,
-      new Date()
-    );
-
     const listEl = document.getElementById('stationsList');
     const hudEl = document.getElementById('driveHudPanel');
     if (listEl) listEl.hidden = this.hudMode;
@@ -1459,7 +1371,6 @@ class ZapfyApp {
     this.renderHomeRefBanner();
     this.renderStationsList(ranking);
     this.renderDriveHud(ranking);
-    this.renderForecastAndStatsTab(ranking, forecast);
     this.renderHomeStationSetup();
     return { skipsReset };
   }
@@ -1829,180 +1740,6 @@ class ZapfyApp {
         </div>
       </div>
     `;
-  }
-
-  renderForecastAndStatsTab(ranking, forecast) {
-    const fuelTitleEl = document.getElementById('statsFuelTitle');
-    if (fuelTitleEl) {
-      fuelTitleEl.textContent = `${FUEL_LABELS[this.fuelType]} Prognose`;
-    }
-
-    // Recommendation Bar (Zero visual noise)
-    const heroEl = document.getElementById('recommendationHero');
-    const windowEl = document.getElementById('recBestWindow');
-    const headlineEl = document.getElementById('recHeadline');
-    const sublineEl = document.getElementById('recSubline');
-
-    if (heroEl) {
-      heroEl.className = `forecast-status-card signal-${forecast.signal}`;
-    }
-    if (windowEl) windowEl.textContent = forecast.bestWindowText || '18–20h';
-    if (headlineEl) headlineEl.textContent = forecast.headline;
-    if (sublineEl) sublineEl.textContent = forecast.subline;
-
-    // 1. Intraday Horizontal Timeline (Replaces intrusive vertical bars)
-    const timelineContainer = document.getElementById('hourlyChartGrid');
-    const hourlyHintEl = document.getElementById('hourlyChartHint');
-    if (hourlyHintEl) {
-      hourlyHintEl.textContent = `Bestzeit: ${forecast.bestWindowText || '18–20 Uhr'}`;
-    }
-
-    if (timelineContainer && forecast.hourlySlots?.length) {
-      const now = new Date();
-      const nowHour = now.getHours();
-      const nowMin = now.getMinutes();
-
-      // Timeline Scale: 06:00 to 22:00 = 16 hours = 960 minutes
-      const startHour = 6;
-      const endHour = 22;
-      const totalMinutes = (endHour - startHour) * 60; // 960
-      const currentMinutesFromStart = Math.max(0, Math.min(totalMinutes, (nowHour - startHour) * 60 + nowMin));
-      const nowPct = Math.max(2, Math.min(98, (currentMinutesFromStart / totalMinutes) * 100)).toFixed(1);
-
-      // Best Window: 17:00 to 21:00 (68.75% to 93.75%)
-      const bestStartPct = (((17 - startHour) * 60) / totalMinutes * 100).toFixed(1);
-      const bestWidthPct = (((21 - 17) * 60) / totalMinutes * 100).toFixed(1);
-
-      // Key Milestones: Morning Peak (08h), Current, Evening Low (19h)
-      const morningSlot = forecast.hourlySlots.find((s) => s.hour === 8) || forecast.hourlySlots[1] || forecast.hourlySlots[0];
-      const eveningSlot = forecast.hourlySlots.find((s) => s.hour === 18 || s.hour === 20) || forecast.hourlySlots[5] || { price: forecast.eveningExpectedMin || 1.659 };
-      const currentSlot = forecast.hourlySlots.find((s) => Math.abs(s.hour - nowHour) <= 1) || { price: ranking.minPrice || morningSlot.price };
-
-      const mPriceFmt = PriceEngine.formatPriceParts(morningSlot.price);
-      const cPriceFmt = PriceEngine.formatPriceParts(currentSlot.price);
-      const ePriceFmt = PriceEngine.formatPriceParts(eveningSlot.price);
-
-      timelineContainer.innerHTML = `
-        <div class="timeline-track-wrap">
-          <div class="timeline-track">
-            <div class="timeline-best-zone" style="left: ${bestStartPct}%; width: ${bestWidthPct}%;" title="Bestpreis-Fenster"></div>
-            <div class="timeline-now-pin" style="left: ${nowPct}%;">
-              <span class="timeline-now-label">Jetzt</span>
-              <span class="timeline-now-dot"></span>
-            </div>
-          </div>
-          <div class="timeline-scale">
-            <span>06:00</span>
-            <span>12:00</span>
-            <span class="text-emerald">18:00 (Tief)</span>
-            <span>22:00</span>
-          </div>
-        </div>
-
-        <div class="timeline-milestones">
-          <div class="timeline-milestone">
-            <span class="milestone-label">Morgens</span>
-            <span class="milestone-price">${mPriceFmt.fullText}</span>
-          </div>
-          <div class="timeline-milestone is-now">
-            <span class="milestone-label">Aktuell</span>
-            <span class="milestone-price">${cPriceFmt.fullText}</span>
-          </div>
-          <div class="timeline-milestone is-best">
-            <span class="milestone-label">Abends (Bestzeit)</span>
-            <span class="milestone-price">${ePriceFmt.fullText}</span>
-          </div>
-        </div>
-      `;
-    }
-
-    // 2. Weekday Trend Grid (Mo - So, streamlined & calm)
-    const weekdayGrid = document.getElementById('weekdayChartGrid');
-    const weekdayHintEl = document.getElementById('weekdayTrendHint');
-
-    if (weekdayGrid && forecast.weekdayStats?.length) {
-      const minDayAvg = Math.min(...forecast.weekdayStats.map((d) => d.avg));
-      const cheapestDay = forecast.weekdayStats.find((d) => Math.abs(d.avg - minDayAvg) < 0.003);
-
-      if (weekdayHintEl && cheapestDay) {
-        weekdayHintEl.textContent = `${cheapestDay.label} meist am günstigsten`;
-      }
-
-      weekdayGrid.innerHTML = forecast.weekdayStats.map((d) => {
-        const isCheapest = Math.abs(d.avg - minDayAvg) < 0.003;
-        const pFmt = PriceEngine.formatPriceParts(d.avg);
-        return `
-          <div class="weekday-cell ${isCheapest ? 'is-cheapest-day' : ''}">
-            <span class="weekday-name">${d.label}</span>
-            <span class="weekday-val">${pFmt.main}⁹</span>
-          </div>
-        `;
-      }).join('');
-    }
-
-    // 3. Historical Station Ranking List (Tab 2: Ranking Subview)
-    const topListEl = document.getElementById('topStationsHistoryList');
-    if (topListEl) {
-      if (!forecast.topHistoricalStations || forecast.topHistoricalStations.length === 0) {
-        topListEl.innerHTML = `
-          <div class="empty-state">
-            Noch keine historischen Stationsdaten für ${FUEL_LABELS[this.fuelType]} erfasst.
-          </div>
-        `;
-      } else {
-        topListEl.innerHTML = forecast.topHistoricalStations.map((item, idx) => {
-          const liveStation = this.stations.find((s) => s.id === item.stationId);
-          const stObj = liveStation || {
-            id: item.stationId,
-            name: item.name,
-            brand: item.name,
-            place: item.place,
-            street: item.street,
-            houseNumber: item.houseNumber,
-            lat: item.lat,
-            lng: item.lng,
-            dist: item.dist,
-            isOpen: true
-          };
-
-          const avgFmt = PriceEngine.formatPriceParts(item.avgPrice);
-          const minFmt = PriceEngine.formatPriceParts(item.minPrice);
-          const gmaps = FuelApiService.getGoogleMapsLinks(stObj);
-          const openStatusHtml = liveStation ? this.formatOpenStatusHtml(liveStation) : '';
-          const distStr = typeof stObj.dist === 'number' && stObj.dist > 0 ? `${stObj.dist.toFixed(1).replace('.', ',')} km` : '';
-          const placeStr = stObj.place || stObj.street || '';
-
-          const metaParts = [
-            openStatusHtml,
-            distStr ? `<span>${this.escapeHtml(distStr)}</span>` : '',
-            placeStr ? `<span>${this.escapeHtml(placeStr)}</span>` : '',
-            `<span>Tief: ${minFmt.fullText}</span>`,
-            `<span>${item.samples}×</span>`
-          ].filter(Boolean).join(' · ');
-
-          const stationName = liveStation ? (liveStation.brand || liveStation.name) : item.name;
-
-          return `
-            <div class="hist-station-row" data-station-id="${this.escapeHtml(item.stationId || '')}" title="Antippen, um genaue Öffnungszeiten zu prüfen">
-              <div class="hist-station-left">
-                <div class="hist-station-name">#${idx + 1} · ${this.escapeHtml(stationName)}</div>
-                <div class="hist-station-meta">${metaParts}</div>
-              </div>
-              <div class="hist-station-right">
-                <div class="hist-price-badge">Ø ${avgFmt.fullText}</div>
-                <a href="${gmaps.mapViewUrl}" target="_blank" rel="noopener noreferrer" class="btn-gmaps-pin btn-hist-pin" title="Pin auf Google Maps Karte zeigen" onclick="event.stopPropagation();">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
-                    <circle cx="12" cy="10" r="3"></circle>
-                  </svg>
-                  <span>Pin</span>
-                </a>
-              </div>
-            </div>
-          `;
-        }).join('');
-      }
-    }
   }
 
   // --- Route Corridor & Google Maps Handover ---
@@ -2397,15 +2134,6 @@ class ZapfyApp {
     }
   }
 
-  async handleExportCsv() {
-    try {
-      const count = await ExportService.exportSnapshotsCsv();
-      this.showToast(`CSV exportiert (${count} Messwerte)`);
-    } catch (err) {
-      this.showToast('CSV-Export fehlgeschlagen');
-    }
-  }
-
   async handleBackupShare() {
     try {
       const res = await ExportService.backupAndShare();
@@ -2432,13 +2160,6 @@ class ZapfyApp {
     } finally {
       e.target.value = '';
     }
-  }
-
-  async handleClearHistory() {
-    await db.clearAllSnapshots();
-    this.snapshots = [];
-    this.renderAll();
-    this.showToast('Preis-Statistik zurückgesetzt');
   }
 
   showToast(message, { actionLabel = '', onAction = null, durationMs = 2600 } = {}) {
@@ -2557,21 +2278,6 @@ class ZapfyApp {
       if (st && st.id && !byId.has(st.id)) {
         byId.set(st.id, st);
       }
-    }
-    for (let i = (this.snapshots || []).length - 1; i >= 0; i -= 1) {
-      const snap = this.snapshots[i];
-      if (!snap || !snap.station_id || byId.has(snap.station_id)) continue;
-      byId.set(snap.station_id, {
-        id: snap.station_id,
-        name: snap.station_name || 'Tankstelle',
-        brand: snap.station_name || '',
-        street: snap.street || '',
-        houseNumber: snap.houseNumber || '',
-        place: snap.place || '',
-        lat: snap.lat || null,
-        lng: snap.lng || null
-      });
-      if (byId.size >= 12) break;
     }
     return Array.from(byId.values());
   }

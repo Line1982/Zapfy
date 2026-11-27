@@ -21,9 +21,9 @@
      - `🧭 Route starten (Maps)`: Startet sofort die Turn-by-Turn-Navigation (`google.com/maps/dir/?api=1&destination=lat,lng&travelmode=driving`).
      - `📍 Pin`: Öffnet den exakten Pin in Google Maps, um die Lage relativ zur aktiven Route zu prüfen oder als Zwischenstopp einzufügen.
 
-4. **Lokale Langzeit-Statistik & Preisprognose (`IndexedDB`):**
-   - Bei jedem Öffnen und Aktualisieren speichert Zapfy automatisch die aktuellen Stationspreise (in 20-Minuten-Buckets dedupliziert) lokal auf dem Gerät.
-   - Kombiniert die eigenen Messwerte mit dem MTS-K Tageszeitmodell zu einer klaren Empfehlung (`🔥 Jetzt tanken!` vs. `⏳ Besser bis 18–20 Uhr warten`).
+4. **Fokussierte 2-Tab-Struktur (`Preise` & `Setup`) mit Route-Korridor, Spar-Konto & Stamm-Tankstelle:**
+   - **Tab 1 (`Preise`):** Route-Corridor-Bar (`#routeBar`), Daheim-Referenzbanner, Hero-Karte, Drive-HUD und Daumen-Dock unten.
+   - **Tab 2 (`Setup`):** Fahrzeugprofil (Kraftstoff, Tankvolumen, Verbrauch), Tankerkönig API-Key, Fallback-Ort & Kurzlink-Resolver, Stamm-Tankstelle („Haus-und-Hof“), **🏆 Mein Spar-Konto** (mit Undo/Reset) sowie JSON-Backup & Restore.
 
 5. **Priorisierte Sortierung & Ruhige Statusanzeige:**
    - **Platz 0 (Ganz oben):** Die blau markierte **Smart-Umweg-Karte** (falls sich 1–4 km Weiterfahrt nach Spritkosten-Abzug netto rentiert) steht immer an oberster Stelle.

@@ -6,18 +6,8 @@ Zapfy speichert alle Daten lokal im Browser über `IndexedDB` (`zapfy_db`, Versi
 
 ## 1. Object Stores
 
-### 1.1 `price_snapshots` (`keyPath: 'id'`)
-Speichert historische Preisbeobachtungen (automatisch bei jedem App-Abruf erfasst, dedupliziert auf 20-Minuten-Zeitfenster pro Station):
-- `id`: `"snap_<station_id>_<bucket20m>"`
-- `station_id`: UUID der Tankstelle
-- `station_name`: Markenname / Bezeichnung (z. B. `"JET"`)
-- `place`: Ort
-- `timestamp`: ISO-8601 Zeitstempel
-- `date`: `"YYYY-MM-DD"` (lokales Kalenderdatum)
-- `hour`: Stunde `0..23` (Index `hour`)
-- `weekday`: ISO-Wochentag `1..7` (Mo=1 .. So=7, Index `weekday`)
-- `e10`, `e5`, `diesel`: Preis in Euro (z. B. `1.689`)
-- `dist`: Entfernung in km zum Abrufzeitpunkt
+### 1.1 `price_snapshots` (`keyPath: 'id'`, Legacy)
+Historischer Object Store aus v1/v2.2 (bleibt aus Schema-Kompatibilität in IndexedDB Version `2` erhalten, wird ab v2.3 nicht mehr aktiv beschrieben oder exportiert).
 
 ### 1.2 `station_details` (`keyPath: 'id'`)
 Zwischenspeicher für exakte Öffnungszeiten einzelner Tankstellen (7 Tage Auto-Refresh TTL):
@@ -28,7 +18,7 @@ Gespeicherte Lieblingstankstellen (`★`):
 - `id`, `name`, `brand`, `street`, `houseNumber`, `postCode`, `place`, `lat`, `lng`, `added_at`
 
 ### 1.4 `settings` (`keyPath: 'key'`)
-Benutzereinstellungen (Hinweis: `apiKey` wird bei JSON-Backups aus Datenschutzgründen niemals mitexportiert):
+Benutzereinstellungen (JSON-Backup-Format `version: 2` exportiert `favorites` & `settings`; `apiKey` wird aus Datenschutzgründen niemals mitexportiert, ältere `version: 1`-Backups bleiben beim Import kompatibel):
 - `apiKey`: Persönlicher Tankerkönig API-Key (String, nur lokal gespeichert)
 - `demoMode`: Simulationsmodus erzwingen (`true`/`false`)
 - `tankVolume`: Tankgröße in Litern (Standard: `50`)

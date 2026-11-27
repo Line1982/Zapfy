@@ -1,7 +1,7 @@
 /**
  * Zapfy IndexedDB Layer (js/db.js)
  * Standalone browser database with transaction safety and persistence guarantee.
- * Stores price snapshots for statistics/forecasting, favorite stations, and user settings.
+ * Stores station opening-hour cache, favorite stations, and user settings (incl. savings & home station).
  */
 
 const DB_NAME = 'zapfy_db';
@@ -31,7 +31,7 @@ class ZapfyDB {
       req.onupgradeneeded = (e) => {
         const db = e.target.result;
 
-        // Store for historical price snapshots (used for statistics & forecasting)
+        // Legacy store kept for IndexedDB schema v2 compatibility
         if (!db.objectStoreNames.contains('price_snapshots')) {
           const snapStore = db.createObjectStore('price_snapshots', { keyPath: 'id' });
           snapStore.createIndex('timestamp', 'timestamp', { unique: false });
@@ -65,110 +65,6 @@ class ZapfyDB {
         console.error('IndexedDB open error:', e);
         reject(e.target.error);
       };
-    });
-  }
-
-  // --- Price Snapshots CRUD ---
-
-  async getAllSnapshots() {
-    await this.init();
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction('price_snapshots', 'readonly');
-      const store = tx.objectStore('price_snapshots');
-      const req = store.getAll();
-      req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  /**
-   * Saves a batch of station price snapshots from a live API or demo fetch.
-   * Deduplicates snapshots within the same 20-minute bucket per station so frequent
-   * refreshes don't skew hourly averages.
-   */
-  async saveSnapshotsBatch(stations, now = new Date()) {
-    await this.init();
-    if (!Array.isArray(stations) || stations.length === 0) return 0;
-
-    const bucket20m = Math.floor(now.getTime() / (20 * 60 * 1000));
-    const isoTimestamp = now.toISOString();
-    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    const hour = now.getHours();
-    // Convert JS getDay() (0=Sun..6=Sat) to ISO weekday (1=Mon..7=Sun)
-    const weekday = now.getDay() === 0 ? 7 : now.getDay();
-
-    const tx = this.db.transaction('price_snapshots', 'readwrite');
-    const store = tx.objectStore('price_snapshots');
-    let savedCount = 0;
-
-    for (const st of stations) {
-      if (!st.isOpen) continue;
-      if (typeof st.e5 !== 'number' && typeof st.e10 !== 'number' && typeof st.diesel !== 'number') {
-        continue;
-      }
-
-      const id = `snap_${st.id}_${bucket20m}`;
-      const record = {
-        id,
-        station_id: st.id,
-        station_name: st.brand || st.name || 'Tankstelle',
-        place: st.place || '',
-        street: st.street || '',
-        houseNumber: st.houseNumber || '',
-        lat: typeof st.lat === 'number' ? st.lat : null,
-        lng: typeof st.lng === 'number' ? st.lng : null,
-        timestamp: isoTimestamp,
-        date: dateStr,
-        hour,
-        weekday,
-        e5: typeof st.e5 === 'number' ? st.e5 : null,
-        e10: typeof st.e10 === 'number' ? st.e10 : null,
-        diesel: typeof st.diesel === 'number' ? st.diesel : null,
-        dist: typeof st.dist === 'number' ? st.dist : null
-      };
-
-      store.put(record);
-      savedCount++;
-    }
-
-    return new Promise((resolve, reject) => {
-      tx.oncomplete = () => resolve(savedCount);
-      tx.onerror = () => reject(tx.error);
-    });
-  }
-
-  /**
-   * Saves an array of pre-built historical snapshot records (e.g., 14-day history backfill)
-   * in a single IndexedDB transaction without overwriting existing live measurements.
-   */
-  async saveHistoricalRecordsBatch(records) {
-    await this.init();
-    if (!Array.isArray(records) || records.length === 0) return 0;
-
-    const tx = this.db.transaction('price_snapshots', 'readwrite');
-    const store = tx.objectStore('price_snapshots');
-    let count = 0;
-
-    for (const rec of records) {
-      if (!rec || !rec.id) continue;
-      store.put(rec);
-      count++;
-    }
-
-    return new Promise((resolve, reject) => {
-      tx.oncomplete = () => resolve(count);
-      tx.onerror = () => reject(tx.error);
-    });
-  }
-
-  async clearAllSnapshots() {
-    await this.init();
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction('price_snapshots', 'readwrite');
-      const store = tx.objectStore('price_snapshots');
-      const req = store.clear();
-      req.onsuccess = () => resolve(true);
-      req.onerror = () => reject(req.error);
     });
   }
 
@@ -291,7 +187,6 @@ class ZapfyDB {
 
   async exportAllData() {
     await this.init();
-    const snapshots = await this.getAllSnapshots();
     const favorites = await this.getFavorites();
     const allSettings = await new Promise((resolve, reject) => {
       const tx = this.db.transaction('settings', 'readonly');
@@ -305,10 +200,9 @@ class ZapfyDB {
     const settings = allSettings.filter((s) => s && s.key !== 'apiKey');
 
     return {
-      version: 1,
+      version: 2,
       exported_at: new Date().toISOString(),
       app: 'Zapfy',
-      snapshots,
       favorites,
       settings
     };
@@ -316,19 +210,17 @@ class ZapfyDB {
 
   async importAllData(payload) {
     await this.init();
-    if (!payload || !Array.isArray(payload.snapshots)) {
-      throw new Error('Ungültiges Backup-Format: Keine Zapfy-Preisdaten gefunden.');
+    if (
+      !payload ||
+      payload.app !== 'Zapfy' ||
+      (!Array.isArray(payload.settings) && !Array.isArray(payload.favorites) && !Array.isArray(payload.snapshots))
+    ) {
+      throw new Error('Ungültiges Backup-Format: Keine Zapfy-Daten gefunden.');
     }
 
-    const tx = this.db.transaction(['price_snapshots', 'favorites', 'settings'], 'readwrite');
-    const snapStore = tx.objectStore('price_snapshots');
+    const tx = this.db.transaction(['favorites', 'settings'], 'readwrite');
     const favStore = tx.objectStore('favorites');
     const settingStore = tx.objectStore('settings');
-
-    snapStore.clear();
-    for (const s of payload.snapshots) {
-      if (s && s.id) snapStore.put(s);
-    }
 
     if (Array.isArray(payload.favorites)) {
       favStore.clear();

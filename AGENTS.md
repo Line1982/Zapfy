@@ -16,7 +16,7 @@
 1. **Zero-Build Vanilla PWA:** Reines modernes Vanilla JS (ES Modules), HTML5 und CSS3. Kein Node.js, kein NPM, kein Webpack, kein Vite oder fremder Bundler.
 2. **Echtzeit-Daten & Offline-Resilienz:** Bezieht Live-Preise über die offizielle Tankerkönig-API (MTS-K Bundeskartellamt) und fällt ohne API-Key oder ohne Netz nahtlos auf ein deterministisches MTS-K Tageszeit-Simulationsmodell zurück.
 3. **1-Tap Google Maps Handover (Auto-optimiert):** Keine fummelige eingebettete Zweitkarte. Stattdessen große, kontrastreiche 3D-Karten mit direkter 1-Tap-Übergabe (`🧭 Route starten` & `📍 Pin`) an die laufende Google-Maps-App.
-4. **Persistenter Speicher & Statistik:** Nutzt `IndexedDB` + `navigator.storage.persist()` zur lokalen Aufzeichnung von Preis-Snapshots für Tageszeit- und Wochentags-Prognosen.
+4. **Persistenter Speicher (`IndexedDB`):** Nutzt `IndexedDB` + `navigator.storage.persist()` für Einstellungen, Spar-Konto, Stamm-Tankstelle, Route-Schnellziele, Favoriten und den 7-Tage-Öffnungszeiten-Cache.
 5. **C:\ Drive Schutz:** Keine großen temporären Builds oder Caches auf `C:\` schreiben (`C:\` hat akuten Platzmangel). Projekt bleibt auf `D:\Dev\Zapfy`.
 6. **Mobile First UI (Shiftly Design System):** Vollbildfähige Standalone-PWA (`100dvh`, Zero Body Scroll) mit Safe-Area-Insets, 3D Tactile Depth und horizontalen Swipe-Tabs.
 7. **Sprache:** UI ist Deutsch (`de-DE`), Code/Kommentare/Identifier sind strikt Englisch.
